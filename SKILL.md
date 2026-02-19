@@ -1,36 +1,37 @@
 ---
 name: git-commit-helper
-description: This skill should be used when a user requests help preparing or creating a git commit with mandatory safety checks and Conventional Commits formatting.
+description: Use when a user asks to prepare, draft, or execute a git commit. Enforce a safe commit workflow with explicit confirmation, staged-first analysis, sensitive data checks, conflict checks, and strict Conventional Commits formatting in English.
 ---
 
 # Git Commit Helper
 
-## Purpose
+Read `references/commit.md` before running commands.
 
-- Enforce a safe, repeatable commit workflow with required read-only checks before any commit.
-- Ensure Conventional Commits formatting rules are applied consistently.
-- Prevent committing sensitive files or conflict markers and require explicit confirmation before running git commit.
+Use deterministic helpers when available:
+- `scripts/build_commit_context.py`
+- `scripts/check_conflicts.py`
+- `scripts/check_sensitive_files.py`
+- `scripts/check_sensitive_regex_staged.py`
 
-## When to Use
+## Workflow Contract
 
-- Use when the user asks to prepare, draft, or create a git commit (e.g., “Make a commit”, “Prepare a commit message”, “Commit staged changes”).
-- Use when the user wants safety checks before committing (e.g., “Scan for secrets before commit”).
-- Do not use when the user requests cancel/stop the commit workflow (e.g., “Cancel commit”).
+1. Run read-only inspection first.
+2. If staged files exist, scope analysis and commit to staged files only.
+3. If no staged files exist, analyze unstaged tracked files and ask whether to include untracked files.
+4. Block commit on unresolved merge conflict markers.
+5. Run sensitive file-name checks; require explicit user confirmation if matches are found.
+6. Run regex secret checks on staged diff only. If timeout occurs, continue with filename checks and warn that regex scan timed out.
+7. Propose a full English Conventional Commit message and request explicit `yes` or `no`.
+8. Execute `git commit` only after explicit `yes`.
+9. Never use `git add .`; always use explicit file paths.
+10. If user requests cancel/stop, end workflow without running write commands.
 
-## How to Use
+## Commit Message Rules
 
-- Read and follow the repository policy in [`references/commit.md`](git-commit-helper/references/commit.md).
-- Start immediately by executing read-only git inspections: `git status`, `git diff`, `git diff --cached`, `git log --oneline -n 3`.
-- If there are staged files, limit all analysis and commit scope to staged files only; otherwise, analyze unstaged files.
-- Scan the selected files for sensitive filenames (e.g., `.env`, `*.pem`, `*.key`, `id_rsa`, `credentials*`, `secrets*`). If found, stop and require explicit confirmation.
-- Check for merge conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). If found, stop and instruct to resolve conflicts.
-- Evaluate whether changes are unrelated. If unrelated, propose splitting into separate commits and ask for confirmation.
-- Compose a Conventional Commit message using the rules in [`references/commit.md`](git-commit-helper/references/commit.md):
-  - Header ≤50 characters, imperative mood, no trailing period.
-  - Body wrapped at 72 characters when needed, include what changed + why.
-  - Types limited to `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`.
-  - For breaking changes, use `!` after scope and include `BREAKING CHANGE:` in footer.
-- Show the full proposed commit message and ask: “Create commit with this message? (yes/no)”.
-- If the user says “yes”, run `git add` with explicit file list (never `git add .`), then commit via `git commit -F - <<'EOF' ... EOF` and show `git log --oneline -n 1`.
-- If the user says “no”, ask whether to edit or cancel; never commit without re-proposing and receiving “yes”.
-- If the user requests cancel/stop, end the workflow with no commands executed.
+- Header max 50 characters.
+- Imperative mood in summary.
+- No trailing period in summary.
+- Body lines max 72 characters.
+- Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`.
+- For breaking changes: use `!` in header and add `BREAKING CHANGE:` footer.
+- Keep commit messages in English only.

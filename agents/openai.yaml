@@ -1,0 +1,7 @@
+interface:
+  display_name: "Git Commit Helper"
+  short_description: "Safe Conventional Commit workflow assistant"
+  default_prompt: "Use $git-commit-helper to analyze changes, run safety checks, draft an English Conventional Commit message, and execute the commit after explicit confirmation."
+
+policy:
+  allow_implicit_invocation: true

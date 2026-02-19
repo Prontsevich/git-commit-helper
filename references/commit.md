@@ -1,122 +1,112 @@
-## 🔒 Safety & Execution Policy
+## Git Commit Policy
 
-1. **NEVER** run destructive commands (`git push`, `git reset --hard`, `git rebase`, `git clean`, etc.) without explicit confirmation.
+Follow this file as the single source of truth for commit behavior.
 
-2. **ALWAYS** inspect with read-only commands: `git status`, `git diff`, `git diff --cached`, `git log --oneline -n 3`. **DO NOT** display command output to the user — use it internally for analysis only.
+## Required Command Sequence
 
-3. **DO NOT** commit if no changes.
+1. Run read-only context collection first:
+   - `python3 scripts/build_commit_context.py`
+   - `git status`
+   - `git diff`
+   - `git diff --cached`
+   - `git log --oneline -n 3`
+2. Determine commit scope:
+   - If staged files exist: use staged files only.
+   - If no staged files exist: analyze unstaged tracked files; ask user whether to include untracked files.
+3. Run mandatory checks on selected files:
+   - `python3 scripts/check_conflicts.py`
+   - `python3 scripts/check_sensitive_files.py`
+4. Run regex secret scan only on staged diff:
+   - `python3 scripts/check_sensitive_regex_staged.py --timeout 2.0`
+   - If timeout happens, warn and continue with filename checks only.
+5. Draft full commit message in English (Conventional Commits).
+6. Show full proposal and ask exactly:
+   - `Create commit with this message? (yes/no)`
+7. On `yes`:
+   - Run `git add` with explicit paths only.
+   - Write commit message to a temporary file.
+   - Run `git commit -F <temp-file>`.
+   - Show `git log --oneline -n 1`.
+8. On `no`:
+   - Ask whether to edit or cancel.
+   - If edit, update message and show proposal again.
+9. On cancel/stop request:
+   - End without write commands.
 
-4. **ONLY** execute `git commit` after "yes" to full proposal.
+## Hard Rules
 
-5. **ALWAYS** show complete message before confirmation.
+1. Never run `git commit` without explicit `yes` to the full current message.
+2. Never use `git add .` or wildcard add commands.
+3. Never commit when there are no selected files.
+4. Never proceed when merge conflict markers are present.
+5. Always warn and ask explicit confirmation when sensitive filenames are detected.
+6. Always keep commit message text in English.
+7. Always re-show full message after any edit request.
+8. Never run destructive commands (`git reset --hard`, `git clean`, `git push`, `git rebase`) unless user explicitly requests them.
 
-6. **CRITICAL**: When using here-documents with `<<'EOF'`, ensure no text (including comments, explanations, whitespace or newline) follows the `EOF`.
-    Make sure the EOF is on its own line with no additional content.
-    This is not just a formatting preference - it's a strict bash requirement that will break the commit command.
+## Conventional Commit Rules
 
-7. **All code, commands, commits, docs in English.**
-
----
-
-## 🚨 Mandatory Checks
-
-- ✅ No conflicts (no `<<<<<<<`, `=======`, `>>>>>>>` in files).
-
-- ✅ No sensitive files (e.g., `.env`, `*.pem`, `*.key`, `id_rsa`, `credentials*`, `secrets*`); warn and require confirmation.
-
-- ✅ Changes grouped; suggest splitting if unrelated (e.g., bug fix + refactor).
-
-- ✅ At least one changed file.
-
----
-
-## 📋 Format: Conventional Commits
+Template:
 
 ```text
 type(scope): short summary
-[optional body: what changed + why]
-[optional footer: Closes #123, BREAKING CHANGE: ...]
+
+[optional body]
+[optional footer]
 ```
 
-### Rules:
+Rules:
 
-- **Header**: ≤50 characters, imperative mood (`add`, not `added`), no trailing period.
+- Header length <= 50.
+- Use imperative mood.
+- Do not end header with a period.
+- Wrap body lines to <= 72.
+- Allowed `type`: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`.
+- For breaking changes: include `!` in header and `BREAKING CHANGE:` footer.
+- No ticket format is required.
 
-- **Body**: Wrap at 72 characters per line.
+## Secret Detection Policy
 
-- **Types**: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`.
+Run two tiers:
 
-- **Breaking changes**: Use `!` after scope (e.g., `feat(api)!: drop Node 14`) AND `BREAKING CHANGE: ...` in footer.
+1. Fast filename policy scan:
+   - Detect risky names and extensions like `.env*`, `*.pem`, `*.key`, `id_rsa`, `*secret*`, `*credential*`.
+   - If matched, stop for confirmation.
+2. Regex content scan on staged diff:
+   - Scan only added lines from `git diff --cached`.
+   - Use short timeout (default 2 seconds) to avoid slow commits.
+   - If timeout occurs, state that regex scan timed out and ask whether to continue.
 
-- **Scope**: Lowercase, no spaces (e.g., `auth`, `ui/layout`, `deps`).
+## Conflict Marker Policy
 
-### Example:
+Search selected files for:
 
-```text
-feat(auth): add JWT validation
-- Implemented token parsing with expiry checks
-- Added tests for invalid/expired tokens
-BREAKING CHANGE: requires new env var JWT_SECRET
+- `<<<<<<<`
+- `=======`
+- `>>>>>>>`
+
+If any marker is found, stop and ask user to resolve conflicts first.
+
+## Confirmation Text
+
+Use these exact prompts to keep behavior deterministic:
+
+- `Create commit with this message? (yes/no)`
+- `Edit message or cancel? (edit/cancel)`
+- `Sensitive files detected. Continue anyway? (yes/no)`
+- `Regex secret scan timed out. Continue with filename checks only? (yes/no)`
+
+## Commit Execution
+
+Use temp-file commit message flow:
+
+```bash
+tmp_msg="$(mktemp)"
+cat >"$tmp_msg" <<'EOF'
+<FULL COMMIT MESSAGE>
+EOF
+git commit -F "$tmp_msg"
+rm -f "$tmp_msg"
 ```
 
----
-
-## 🎯 Workflow
-
-**IMPORTANT**: Upon receiving this instruction, **IMMEDIATELY** begin analyzing changes and preparing the commit. Do not wait for additional prompts — start the workflow right away.
-
-1. **Check state**: Run `git status`. List modified/staged/untracked. If untracked: "Add new files [list]? (yes/no)"
-
-2. **Scan for secrets**: If matches: "⚠️ Sensitive files detected: [files]. Do not commit credentials! Continue? (yes/no)"
-
-3. **Check for conflicts**: If markers found: "Merge conflicts detected. Resolve them first."
-
-4. **Evaluate granularity**: If unrelated changes: "Changes seem unrelated. Split into separate commits? (yes/no)"
-
-5. **Compose message**: Simple → header only; Complex → add body (what + why). Aanalyze available context (open files, selected code, file diffs) to understand changes and suggest appropriate type/scope/summary.
-
-6. **Show full proposal**:
-
-```text
-📋 Proposing commit:
-[COMPLETE COMMIT MESSAGE]
-Create commit with this message? (yes/no)
-```
-
-7. **Handle response and execute**:
-
-    - If "yes": Run `git add [explicit file list]`; then `git commit -F - <<'EOF' [COMPLETE MESSAGE] EOF`. Show `git log --oneline -n 1` to confirm.
-
-    - If "no": "Why not? Edit message or cancel? (edit/cancel)" If "edit": Request changes, revise, and **ALWAYS show the updated proposal again** with "Create commit with this message? (yes/no)" — **NEVER commit without showing the updated proposal and getting confirmation**.
-
-    - If user requests any changes (edit message, split commits, modify scope, etc.): Make the requested changes and **ALWAYS show the updated proposal again** with "Create commit with this message? (yes/no)" — **NEVER commit immediately after making changes without showing the proposal and getting confirmation**.
-
-    - If "cancel": Stop.
-
-    - If other response: "Please respond with 'yes' or 'no'."
-
-    - If any command fails (e.g., permissions error, Git issue): "Error: [description]. Retry or cancel? (retry/cancel)". Do not proceed until fixed.
-
----
-
-## ⚠️ Common Mistakes to Avoid
-
-- Vague summaries (`"update"`, `"fix stuff"`)
-
-- Committing unrelated changes together
-
-- Ignoring untracked or sensitive files
-
-- Skipping confirmation before `git commit`
-
-- Using non-English in commits/code
-
-- Exceeding line limits (50 header, 72 body)
-
-- Displaying raw output of `git status`, `git diff`, `git log` commands to the user
-
-- Committing immediately after making changes to the message without showing the updated proposal and getting confirmation
-
----
-
-> 💡 Never use `git add .` — explicit files only. Never assume intent — always confirm. Use available IDE context (open files, selected code, diffs) to better understand changes when composing commit messages.
+Ensure `EOF` is on its own line with no trailing text.
