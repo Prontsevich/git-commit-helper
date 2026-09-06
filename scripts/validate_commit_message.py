@@ -14,12 +14,17 @@ warning (aligns with commitlint's default header-max-length), > 100 is an
 error. Git trailers (Co-Authored-By, Signed-off-by, BREAKING CHANGE, …)
 and lines containing URLs are exempt from the body wrap entirely; other body
 lines follow the header's two tiers - 72 preferred, 100 hard.
+
+Body shape (two content lines, no file paths or function names) and the
+Co-Authored-By trailer are warnings only. The trailer hint reads a default
+from GIT_COMMIT_HELPER_COAUTHOR; --no-coauthor-check silences it.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -60,6 +65,19 @@ BODY_HARD_MAX = 100
 BREAKING_FOOTER_PREFIX = "BREAKING CHANGE:"
 # A git trailer line: "Key: value" with a hyphenated single-token key.
 TRAILER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: .+$")
+
+# Body shape: the policy is "two lines - why, then what". Anything beyond that
+# is usually investigation notes or a file inventory, which belong in the
+# tracker and the diff respectively. These are warnings, never errors.
+BODY_CONTENT_LINES = 2
+PATH_LEAK_RE = re.compile(
+    r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+"          # a/b/c.ext or a/b
+    r"|\b[\w-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|cs|rb|php|swift|"
+    r"c|cc|cpp|h|hpp|md|ya?ml|json|toml|sh|sql|html|css|scss|vue)\b"
+)
+FUNCTION_LEAK_RE = re.compile(r"\b[A-Za-z_][\w.]*\(\)")
+
+COAUTHOR_ENV = "GIT_COMMIT_HELPER_COAUTHOR"
 
 PAST_TENSE_HINTS = {
     "added",
@@ -186,13 +204,45 @@ def coauthor_nudge(trailing_lines: list[str]) -> list[str]:
     )
     if has_coauthor:
         return []
-    return [
-        "No Co-Authored-By trailer found; append the harness-required trailer "
-        "(e.g. 'Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>')."
+    default = os.environ.get(COAUTHOR_ENV, "").strip()
+    if default:
+        hint = f"append '{default}' (from {COAUTHOR_ENV})"
+    else:
+        hint = (
+            "append the exact trailer your harness dictates, or pass "
+            "--no-coauthor-check if it requires none"
+        )
+    return [f"No Co-Authored-By trailer found; {hint}."]
+
+
+def body_shape_warnings(trailing_lines: list[str]) -> list[str]:
+    """Warn when the body drifts from the two-line why/what shape."""
+    content = [
+        line
+        for line in trailing_lines
+        if line.strip() and not is_exempt_from_wrap(line)
     ]
+    warnings: list[str] = []
+    if len(content) > BODY_CONTENT_LINES:
+        warnings.append(
+            f"Body has {len(content)} content lines; the default is two lines "
+            "(why the change was needed, then what changed). Move findings, "
+            "mechanism and justification to the tracker or plan doc."
+        )
+    if any(PATH_LEAK_RE.search(line) for line in content):
+        warnings.append(
+            "Body mentions file paths; the diff already shows them."
+        )
+    if any(FUNCTION_LEAK_RE.search(line) for line in content):
+        warnings.append(
+            "Body mentions function names; the diff already shows them."
+        )
+    return warnings
 
 
-def builtin_validate(message: str, lines: list[str]) -> dict[str, object]:
+def builtin_validate(
+    message: str, lines: list[str], check_coauthor: bool = True
+) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -265,7 +315,9 @@ def builtin_validate(message: str, lines: list[str]) -> dict[str, object]:
         if has_breaking_footer and not breaking:
             errors.append("BREAKING CHANGE: footer requires ! in the header.")
 
-    warnings.extend(coauthor_nudge(trailing_lines))
+    warnings.extend(body_shape_warnings(trailing_lines))
+    if check_coauthor:
+        warnings.extend(coauthor_nudge(trailing_lines))
 
     status = "invalid" if errors else "ok"
     payload: dict[str, object] = {
@@ -279,7 +331,9 @@ def builtin_validate(message: str, lines: list[str]) -> dict[str, object]:
     return payload
 
 
-def validate(message: str, use_commitlint: bool = True) -> dict[str, object]:
+def validate(
+    message: str, use_commitlint: bool = True, check_coauthor: bool = True
+) -> dict[str, object]:
     lines = message.splitlines()
 
     if not message.strip():
@@ -305,7 +359,9 @@ def validate(message: str, use_commitlint: bool = True) -> dict[str, object]:
             trailing_lines = lines[2:] if len(lines) > 2 else []
             if any(ord(ch) > 127 for ch in message):
                 errors.append("Commit message must use English ASCII text only.")
-            warnings.extend(coauthor_nudge(trailing_lines))
+            warnings.extend(body_shape_warnings(trailing_lines))
+            if check_coauthor:
+                warnings.extend(coauthor_nudge(trailing_lines))
 
             status = "invalid" if errors else "ok"
             return {
@@ -316,7 +372,7 @@ def validate(message: str, use_commitlint: bool = True) -> dict[str, object]:
             }
 
         # Config present but commitlint not runnable: fall back, but say so.
-        result = builtin_validate(message, lines)
+        result = builtin_validate(message, lines, check_coauthor)
         result.setdefault("warnings", [])
         result["warnings"].insert(
             0,
@@ -325,7 +381,7 @@ def validate(message: str, use_commitlint: bool = True) -> dict[str, object]:
         )
         return result
 
-    return builtin_validate(message, lines)
+    return builtin_validate(message, lines, check_coauthor)
 
 
 def main() -> int:
@@ -338,11 +394,20 @@ def main() -> int:
         action="store_true",
         help="skip commitlint delegation and always use built-in validation",
     )
+    parser.add_argument(
+        "--no-coauthor-check",
+        action="store_true",
+        help="do not warn when the Co-Authored-By trailer is missing",
+    )
     args = parser.parse_args()
 
     try:
         message = load_message(args)
-        result = validate(message, use_commitlint=not args.no_commitlint)
+        result = validate(
+            message,
+            use_commitlint=not args.no_commitlint,
+            check_coauthor=not args.no_coauthor_check,
+        )
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 2 if result["status"] != "ok" else 0
     except OSError as exc:
