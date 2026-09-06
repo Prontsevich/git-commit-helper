@@ -2,12 +2,12 @@
 
 Follow this file as the single source of truth for commit behavior.
 
-**Helper scripts:** Run from workspace; use absolute path to the skill. On Unix/macOS: `~/.claude/skills/git-commit-helper/scripts/`. On Windows: `%USERPROFILE%\.claude\skills\git-commit-helper\scripts\`.
+**Helper scripts:** Run from the workspace; call them by absolute path. `$SKILL_DIR` below is the directory containing `SKILL.md` (see **Locating the helper scripts** there).
 
 ## Required command sequence
 
 1. Run read-only context collection first:
-   - `python3 ~/.claude/skills/git-commit-helper/scripts/build_commit_context.py`
+   - `python3 $SKILL_DIR/scripts/build_commit_context.py`
    - `git status`
    - `git diff`
    - `git diff --cached`
@@ -19,14 +19,14 @@ Follow this file as the single source of truth for commit behavior.
      - `Include untracked files in this commit? (yes/no)`
    - Include untracked files only after explicit `yes` and pass `--include-untracked`.
 3. Run mandatory checks on selected files:
-   - Conflict markers: `python3 ~/.claude/skills/git-commit-helper/scripts/check_conflicts.py --source <index|worktree> [--include-untracked]`
-   - Sensitive filenames: `python3 ~/.claude/skills/git-commit-helper/scripts/check_sensitive_files.py --source <index|worktree> [--include-untracked]`
+   - Conflict markers: `python3 $SKILL_DIR/scripts/check_conflicts.py --source <index|worktree> [--include-untracked]`
+   - Sensitive filenames: `python3 $SKILL_DIR/scripts/check_sensitive_files.py --source <index|worktree> [--include-untracked]`
 4. Run regex secret scan on selected scope:
-   - `python3 ~/.claude/skills/git-commit-helper/scripts/check_sensitive_regex_staged.py --source <index|worktree> [--include-untracked] --timeout 2.0`
+   - `python3 $SKILL_DIR/scripts/check_secrets.py --source <index|worktree> [--include-untracked] --timeout 2.0`
    - If timeout happens, warn and continue with filename checks only after explicit `yes`.
-5. Draft full commit message in English (Conventional Commits). Append the harness-required `Co-Authored-By` trailer as the last line after a blank line (see **Co-Authored-By trailer**).
+5. Draft full commit message in English (Conventional Commits). Append the `Co-Authored-By` trailer your harness dictates as the last line after a blank line (see **Co-Authored-By trailer**).
 6. Validate message before confirmation:
-   - `python3 ~/.claude/skills/git-commit-helper/scripts/validate_commit_message.py --file <temp-file>`
+   - `python3 $SKILL_DIR/scripts/validate_commit_message.py --file <temp-file>`
    - The validator delegates to the repo's commitlint when configured and runnable (`"mode": "commitlint"`); otherwise it uses built-in rules (`"mode": "builtin"`).
    - If validation fails (`status` is `invalid`), revise and re-run validation until status is `ok`. Warnings do not block, but read them.
 7. Show full proposal and ask exactly:
@@ -50,7 +50,7 @@ Follow this file as the single source of truth for commit behavior.
 5. Always warn and ask explicit confirmation when sensitive filenames are detected.
 6. Always keep commit message text in English.
 7. Always re-show full message after any edit request.
-8. Always run the skill's `validate_commit_message.py` (full path to skill scripts dir) and require `status: ok` before confirmation.
+8. Always run the skill's `validate_commit_message.py` (absolute path under `$SKILL_DIR`) and require `status: ok` before confirmation.
 9. Never run destructive commands (`git reset --hard`, `git clean`, `git push`, `git rebase`) unless user explicitly requests them.
 10. Never bypass git hooks (`--no-verify`); let husky `commit-msg`/`pre-commit` hooks run.
 
@@ -64,7 +64,7 @@ type(scope): short summary
 [optional body]
 
 [optional footer / trailers]
-Co-Authored-By: <Model Name> <noreply@anthropic.com>
+Co-Authored-By: <Model Name> <noreply@vendor.example>
 ```
 
 Rules:
@@ -82,17 +82,21 @@ Rules:
 
 ## Co-Authored-By trailer
 
-Every commit authored by the agent must end with a `Co-Authored-By` trailer
-naming the model, on its own line after a blank line:
+Most harnesses require every commit the agent authors to end with a
+`Co-Authored-By` trailer naming the model, on its own line after a blank line:
 
 ```text
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: <Model Name> <noreply@vendor.example>
 ```
 
-The exact model string is dictated by the harness instruction in effect for the
-current session — use whatever that session requires rather than hardcoding a
-model. The validator emits a warning (not an error) when the trailer is absent,
-so it is a nudge, not a gate: always include it unless the user opts out.
+Resolution order for the exact string:
+
+1. The harness or system-prompt instruction in effect for the current session (always wins).
+2. `GIT_COMMIT_HELPER_COAUTHOR` from the environment, if set.
+3. Otherwise omit the trailer and pass `--no-coauthor-check` to the validator.
+
+Never hardcode a model name from these docs. The validator emits a warning (not
+an error) when the trailer is absent, so it is a nudge, not a gate.
 
 ## commitlint / husky policy
 
@@ -140,6 +144,7 @@ Use when a task spans **UI refactors + shared infra + multiple feature domains +
 
 ### Rules
 
+- Start from `python3 $SKILL_DIR/scripts/propose_split.py --source <index|worktree> [--include-untracked]`; it groups the selected files by top-level path and artifact kind (source, tests, docs, config, generated) and prints a draft plan. Rename scopes and merge groups by hand.
 - Propose the **full plan** (each commit: header, files) before the first `git add`.
 - Do not combine unrelated domains in one commit.
 - Intermediate commits may be temporarily inconsistent; that is OK for bisect/review.
@@ -170,6 +175,10 @@ Run two tiers:
      - included untracked files: full file content as added lines (`--include-untracked`)
    - Use short timeout (default 2 seconds) to avoid slow commits.
    - If timeout occurs, state that regex scan timed out and ask whether to continue.
+3. Allowlist (`.git-commit-helper-allow` at the repo root):
+   - One regex per line matched against a finding's excerpt, or `path:<glob>` to skip a file in both tiers.
+   - Both scripts report `suppressed_by_allowlist`; mention a non-zero count in the confirmation summary.
+   - Never add an entry to silence a real secret; the fix is to remove the secret.
 
 ## Conflict marker policy
 
@@ -202,9 +211,9 @@ tmp_msg="$(mktemp)"
 cat >"$tmp_msg" <<'EOF'
 <FULL COMMIT MESSAGE>
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: <exact trailer dictated by the harness>
 EOF
-python3 ~/.claude/skills/git-commit-helper/scripts/validate_commit_message.py --file "$tmp_msg"
+python3 $SKILL_DIR/scripts/validate_commit_message.py --file "$tmp_msg"
 git add <explicit path 1> <explicit path 2>
 git commit -F "$tmp_msg"
 rm -f "$tmp_msg"
