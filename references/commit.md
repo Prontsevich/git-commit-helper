@@ -2,49 +2,59 @@
 
 Follow this file as the single source of truth for commit behavior.
 
-## Required Command Sequence
+**Helper scripts:** Run from workspace; use absolute path to the skill. On Unix/macOS: `~/.claude/skills/git-commit-helper/scripts/`. On Windows: `%USERPROFILE%\.claude\skills\git-commit-helper\scripts\`.
+
+## Required command sequence
 
 1. Run read-only context collection first:
-   - `python3 scripts/build_commit_context.py`
+   - `python3 ~/.claude/skills/git-commit-helper/scripts/build_commit_context.py`
    - `git status`
    - `git diff`
    - `git diff --cached`
    - `git log --oneline -n 3`
 2. Determine commit scope:
-   - If staged files exist: use staged files only.
-   - If no staged files exist: analyze unstaged tracked files; ask user whether to include untracked files.
+   - If staged files exist: use staged files only (`--source index`).
+   - If no staged files exist: use unstaged tracked files (`--source worktree`).
+   - Ask whether to include untracked files:
+     - `Include untracked files in this commit? (yes/no)`
+   - Include untracked files only after explicit `yes` and pass `--include-untracked`.
 3. Run mandatory checks on selected files:
-   - `python3 scripts/check_conflicts.py`
-   - `python3 scripts/check_sensitive_files.py`
-4. Run regex secret scan only on staged diff:
-   - `python3 scripts/check_sensitive_regex_staged.py --timeout 2.0`
-   - If timeout happens, warn and continue with filename checks only.
-5. Draft full commit message in English (Conventional Commits).
-6. Show full proposal and ask exactly:
+   - Conflict markers: `python3 ~/.claude/skills/git-commit-helper/scripts/check_conflicts.py --source <index|worktree> [--include-untracked]`
+   - Sensitive filenames: `python3 ~/.claude/skills/git-commit-helper/scripts/check_sensitive_files.py --source <index|worktree> [--include-untracked]`
+4. Run regex secret scan on selected scope:
+   - `python3 ~/.claude/skills/git-commit-helper/scripts/check_sensitive_regex_staged.py --source <index|worktree> [--include-untracked] --timeout 2.0`
+   - If timeout happens, warn and continue with filename checks only after explicit `yes`.
+5. Draft full commit message in English (Conventional Commits). Append the harness-required `Co-Authored-By` trailer as the last line after a blank line (see **Co-Authored-By trailer**).
+6. Validate message before confirmation:
+   - `python3 ~/.claude/skills/git-commit-helper/scripts/validate_commit_message.py --file <temp-file>`
+   - The validator delegates to the repo's commitlint when configured and runnable (`"mode": "commitlint"`); otherwise it uses built-in rules (`"mode": "builtin"`).
+   - If validation fails (`status` is `invalid`), revise and re-run validation until status is `ok`. Warnings do not block, but read them.
+7. Show full proposal and ask exactly:
    - `Create commit with this message? (yes/no)`
-7. On `yes`:
-   - Run `git add` with explicit paths only.
-   - Write commit message to a temporary file.
-   - Run `git commit -F <temp-file>`.
+8. On `yes`:
+   - Run `git add` with explicit selected paths only.
+   - Run `git commit -F <temp-file>` (never `--no-verify`).
    - Show `git log --oneline -n 1`.
-8. On `no`:
+9. On `no`:
    - Ask whether to edit or cancel.
-   - If edit, update message and show proposal again.
-9. On cancel/stop request:
+   - If edit, update message, re-validate, and show the full proposal again.
+10. On cancel/stop request:
    - End without write commands.
 
-## Hard Rules
+## Hard rules
 
 1. Never run `git commit` without explicit `yes` to the full current message.
 2. Never use `git add .` or wildcard add commands.
 3. Never commit when there are no selected files.
-4. Never proceed when merge conflict markers are present.
+4. If unresolved merge conflict markers are present, require explicit confirmation before proceeding.
 5. Always warn and ask explicit confirmation when sensitive filenames are detected.
 6. Always keep commit message text in English.
 7. Always re-show full message after any edit request.
-8. Never run destructive commands (`git reset --hard`, `git clean`, `git push`, `git rebase`) unless user explicitly requests them.
+8. Always run the skill's `validate_commit_message.py` (full path to skill scripts dir) and require `status: ok` before confirmation.
+9. Never run destructive commands (`git reset --hard`, `git clean`, `git push`, `git rebase`) unless user explicitly requests them.
+10. Never bypass git hooks (`--no-verify`); let husky `commit-msg`/`pre-commit` hooks run.
 
-## Conventional Commit Rules
+## Conventional Commit rules
 
 Template:
 
@@ -52,51 +62,138 @@ Template:
 type(scope): short summary
 
 [optional body]
-[optional footer]
+
+[optional footer / trailers]
+Co-Authored-By: <Model Name> <noreply@anthropic.com>
 ```
 
 Rules:
 
-- Header length <= 50.
+- Header length: **≤ 72 preferred**, up to **100 allowed** (validator warns), **> 100 is an error**. Do not pad a header to fill space; do not truncate it into something unclear either.
 - Use imperative mood.
 - Do not end header with a period.
-- Wrap body lines to <= 72.
-- Allowed `type`: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`.
+- Body: **two lines by default** — **why** first, then briefly **what**. Omit the body entirely when the header already says it. Every limit here is a ceiling, never a target: do not stretch a body to fill the allowance. Do not list files, function names, or technical details — the diff shows that. Do not narrate the bug mechanism, the investigation, or comparisons to sibling modules — that belongs in the tracker or plan doc.
+- Body line length: **<= 72 preferred**, up to **100 allowed** (validator warns), **> 100 is an error** — tiered exactly like the header. Git trailers and URL-bearing lines are exempt from the wrap entirely.
+- Allowed `type`: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `style`, `build`, `ci`, `chore`, `revert`, `merge`.
+- `merge` is a local addition, not part of the Conventional Commits spec: a merge commit still wants a readable subject, and having no type that fits only teaches people to skip the check.
 - For breaking changes: include `!` in header and `BREAKING CHANGE:` footer.
 - No ticket format is required.
+- **When the repo has a commitlint config, commitlint's rules win** over the defaults above for header format/type/length — the validator enforces them for you.
 
-## Secret Detection Policy
+## Co-Authored-By trailer
+
+Every commit authored by the agent must end with a `Co-Authored-By` trailer
+naming the model, on its own line after a blank line:
+
+```text
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+```
+
+The exact model string is dictated by the harness instruction in effect for the
+current session — use whatever that session requires rather than hardcoding a
+model. The validator emits a warning (not an error) when the trailer is absent,
+so it is a nudge, not a gate: always include it unless the user opts out.
+
+## commitlint / husky policy
+
+- `validate_commit_message.py` auto-detects commitlint config: `commitlint.config.{js,cjs,mjs,ts}`, `.commitlintrc`, `.commitlintrc.{json,yaml,yml,js,cjs,ts}`, or a `commitlint` key in `package.json`.
+- When a config exists and commitlint resolves via `npx --no-install commitlint`, the validator runs commitlint over the message via stdin and reports `"mode": "commitlint"`. commitlint failures become validation errors with its raw output attached.
+- When a config exists but commitlint is not installed, the validator falls back to built-in rules and warns that it did so.
+- When no config exists, the built-in rules apply (`"mode": "builtin"`).
+- `--no-commitlint` forces built-in validation regardless of repo config (escape hatch for debugging).
+- Never pass `--no-verify` to `git commit`. If husky is present, its `commit-msg` hook usually re-runs commitlint — that redundancy is intentional.
+
+## Scope selection
+
+Pick scope from **changed paths and responsibility**, not from the repo or app package name.
+
+**If the repository documents its own commit scopes** (e.g. in `CLAUDE.md`, a
+`CONTRIBUTING`/commit-conventions doc, or a commitlint `scope-enum` rule), follow
+those — they take precedence over the generic guidance here.
+
+**Avoid as scope:** monorepo project names, generic repo labels, or a catch-all like `app`.
+
+**Prefer:**
+
+| Scope | Typical meaning |
+|-------|-----------------|
+| Feature / domain | the feature or domain the change belongs to (its store, pages, components) |
+| `core` / `shared` | cross-domain infrastructure (shared utils, HTTP helpers, common patterns) |
+| Layer / component | a specific shared layer or component when the change is scoped to it |
+| Tool / integration | match existing repo conventions when obvious |
+
+Keep generated artifacts under their own scope (e.g. `chore(<generator>):`) rather than mixing them with source.
+
+One commit = one scope when possible. Mixed domains in one commit only for a truly atomic cross-cutting fix the user requested as a single unit.
+
+## Commit split strategy
+
+Use when a task spans **UI refactors + shared infra + multiple feature domains + generated files**.
+
+### Default: review-friendly order
+
+1. **UI-only refactors** — e.g. `refactor(<component>): …` (no store/API behavior change)
+2. **Shared infrastructure** — e.g. `feat(core): …` (new types/utils used by multiple domains)
+3. **Per-feature integration** — one commit per domain, e.g. `feat(<domain-a>): …`, `feat(<domain-b>): …`
+   (store + page/component for that domain together)
+4. **Generated artifacts last** — e.g. `chore(<generator>): …`; never mix with source in the same commit
+
+### Rules
+
+- Propose the **full plan** (each commit: header, files) before the first `git add`.
+- Do not combine unrelated domains in one commit.
+- Intermediate commits may be temporarily inconsistent; that is OK for bisect/review.
+- If the user asks for one commit, use **minimal** plan and say what review-friendly would look like.
+
+### Example
+
+```text
+refactor(dialogs): use computed for submit disabled state
+feat(core): add hooks for store mutation callbacks
+feat(<domain-a>): close create dialog via store onSuccess hook
+feat(<domain-b>): close create dialog via store onSuccess hook
+chore(codegen): update generated artifacts after store changes
+```
+
+## Secret detection policy
 
 Run two tiers:
 
 1. Fast filename policy scan:
    - Detect risky names and extensions like `.env*`, `*.pem`, `*.key`, `id_rsa`, `*secret*`, `*credential*`.
+   - Run on selected scope (staged or unstaged, with optional untracked).
    - If matched, stop for confirmation.
-2. Regex content scan on staged diff:
-   - Scan only added lines from `git diff --cached`.
+2. Regex content scan:
+   - Scan only added lines from selected scope:
+     - staged scope: staged diff (`--source index`)
+     - unstaged scope: worktree diff (`--source worktree`)
+     - included untracked files: full file content as added lines (`--include-untracked`)
    - Use short timeout (default 2 seconds) to avoid slow commits.
    - If timeout occurs, state that regex scan timed out and ask whether to continue.
 
-## Conflict Marker Policy
+## Conflict marker policy
 
-Search selected files for:
+Search selected files for unresolved merge conflict blocks:
 
 - `<<<<<<<`
 - `=======`
 - `>>>>>>>`
 
-If any marker is found, stop and ask user to resolve conflicts first.
+Treat only real marker blocks as conflicts. If any are found, stop and ask user to resolve them first.
+If user explicitly approves override, continue with extra caution and keep checks/results visible in the confirmation summary.
 
-## Confirmation Text
+## Confirmation text
 
 Use these exact prompts to keep behavior deterministic:
 
+- `Include untracked files in this commit? (yes/no)`
 - `Create commit with this message? (yes/no)`
 - `Edit message or cancel? (edit/cancel)`
 - `Sensitive files detected. Continue anyway? (yes/no)`
+- `Conflict markers detected. Continue anyway? (yes/no)`
 - `Regex secret scan timed out. Continue with filename checks only? (yes/no)`
 
-## Commit Execution
+## Commit execution
 
 Use temp-file commit message flow:
 
@@ -104,7 +201,11 @@ Use temp-file commit message flow:
 tmp_msg="$(mktemp)"
 cat >"$tmp_msg" <<'EOF'
 <FULL COMMIT MESSAGE>
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 EOF
+python3 ~/.claude/skills/git-commit-helper/scripts/validate_commit_message.py --file "$tmp_msg"
+git add <explicit path 1> <explicit path 2>
 git commit -F "$tmp_msg"
 rm -f "$tmp_msg"
 ```

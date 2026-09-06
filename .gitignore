@@ -6,3 +6,5 @@
 .kiro/
 .antigravity/
 *.log
+__pycache__/
+telemetry-id

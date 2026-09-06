@@ -3,9 +3,10 @@
 Guidance for agentic coding assistants working in this repo.
 
 Repository snapshot
-- Primary content: documentation and reference policies.
-- Files of interest: `SKILL.md`, `references/commit.md`.
-- No build system or source code directories detected.
+- Primary content: skill documentation plus deterministic helper scripts.
+- Files of interest: `SKILL.md`, `references/commit.md`, `scripts/*.py`,
+  `tests/test_commit_helper_scripts.py`.
+- No package build system detected.
 
 Authoritative rules to include
 - Cursor rules: none found (`.cursor/rules/` or `.cursorrules`).
@@ -19,16 +20,17 @@ Language and tone
 Build, lint, test
 - No build configuration detected (no `package.json`, `pyproject.toml`,
   `go.mod`, `Cargo.toml`, or `Makefile`).
-- No linting or test framework detected.
-- If new tooling is added, update this section with exact commands.
+- No dedicated lint tool is configured.
+- Validate Python syntax:
+  - `python3 -m py_compile scripts/*.py tests/test_commit_helper_scripts.py`
+- Run tests:
+  - `python3 -m unittest discover -s tests -p 'test_*.py'`
 
 Running a single test
-- Not applicable; no test runner found.
-- If a test runner is added, document the single-test command here.
-- Do not guess syntax; verify in config or tool docs.
-- Common patterns (illustrative only):
-- `<runner> <path/to/test>`
-- `<runner> -k test_name`
+- Run one test module:
+  - `python3 -m unittest tests.test_commit_helper_scripts`
+- Run one test case:
+  - `python3 -m unittest tests.test_commit_helper_scripts.ScriptTestCase.test_validate_commit_message_script`
 
 Detecting tooling
 - Check for `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`,
@@ -36,9 +38,10 @@ Detecting tooling
 - Prefer repo-specific scripts over global defaults.
 
 Project structure
-- Root: documentation files.
+- Root: skill entry docs and workflow policy.
+- `scripts/`: deterministic git workflow and validation helpers.
+- `tests/`: unit tests for helper scripts.
 - `references/`: policy and reference docs.
-- `assets/` and `scripts/` currently contain no substantive content.
 
 Code style overview (docs-first repo)
 - Prefer Markdown with short paragraphs and bullet lists.
@@ -132,8 +135,8 @@ Review checklist for changes
 - Are examples runnable or clearly marked as illustrative?
 
 Known limitations
-- Repo is documentation-only at the moment.
-- Build/test sections are intentionally empty.
+- No package manager/test runner config file exists; Python stdlib tools are used directly.
+- Secret regex heuristics are intentionally conservative and may require user override.
 
 Maintenance
 - Revisit this file when project structure changes.

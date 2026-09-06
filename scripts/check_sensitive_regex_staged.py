@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan staged added lines for likely secrets using regex."""
+"""Scan selected added lines for likely secrets using regex."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -50,9 +51,93 @@ def ensure_git_repo() -> None:
         raise RuntimeError("not inside a git repository")
 
 
-def run_git_diff(timeout_seconds: float) -> str:
+def run_git(args: list[str]) -> str:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--unified=0", "--no-color", "--diff-filter=ACMR"],
+        ["git", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
+    return result.stdout.strip()
+
+
+def list_staged_files() -> list[str]:
+    return [
+        p
+        for p in run_git(["diff", "--cached", "--name-only", "--diff-filter=ACMRD"]).splitlines()
+        if p.strip()
+    ]
+
+
+def list_unstaged_tracked_files() -> list[str]:
+    return [
+        p
+        for p in run_git(["diff", "--name-only", "--diff-filter=ACMRD"]).splitlines()
+        if p.strip()
+    ]
+
+
+def list_untracked_files() -> list[str]:
+    return [
+        p
+        for p in run_git(["ls-files", "--others", "--exclude-standard"]).splitlines()
+        if p.strip()
+    ]
+
+
+def unique_paths(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def resolve_scope(
+    explicit_files: list[str], source: str, include_untracked: bool
+) -> tuple[str, list[str], list[str]]:
+    if explicit_files:
+        effective_source = "worktree" if source == "auto" else source
+        resolved = unique_paths(explicit_files)
+        untracked_set = set(list_untracked_files()) if effective_source == "worktree" else set()
+        untracked = [item for item in resolved if item in untracked_set]
+        tracked = [item for item in resolved if item not in untracked_set]
+        return effective_source, tracked, untracked
+
+    if source == "index":
+        return "index", list_staged_files(), []
+
+    if source == "worktree":
+        tracked = list_unstaged_tracked_files()
+        untracked = list_untracked_files() if include_untracked else []
+        return "worktree", unique_paths(tracked), unique_paths(untracked)
+
+    staged = list_staged_files()
+    if staged:
+        return "index", staged, []
+
+    tracked = list_unstaged_tracked_files()
+    untracked = list_untracked_files() if include_untracked else []
+    return "worktree", unique_paths(tracked), unique_paths(untracked)
+
+
+def run_git_diff(files: list[str], source: str, timeout_seconds: float) -> str:
+    if not files:
+        return ""
+
+    cmd = ["git", "diff"]
+    if source == "index":
+        cmd.append("--cached")
+    cmd.extend(["--unified=0", "--no-color", "--diff-filter=ACMR", "--", *files])
+
+    result = subprocess.run(
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -60,7 +145,7 @@ def run_git_diff(timeout_seconds: float) -> str:
         timeout=timeout_seconds,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "git diff --cached failed")
+        raise RuntimeError(result.stderr.strip() or f"{' '.join(cmd)} failed")
     return result.stdout
 
 
@@ -98,40 +183,83 @@ def scan(diff_text: str) -> list[dict[str, object]]:
     return findings
 
 
+def scan_untracked_file(path: str) -> list[dict[str, object]]:
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return []
+
+    try:
+        payload = file_path.read_bytes()
+    except OSError:
+        return []
+
+    if b"\x00" in payload[:2048]:
+        return []
+
+    text = payload.decode("utf-8", errors="ignore")
+    findings: list[dict[str, object]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for spec in PATTERNS:
+            if spec.regex.search(line):
+                findings.append(
+                    {
+                        "file": path,
+                        "line": lineno,
+                        "pattern": spec.name,
+                        "excerpt": line[:160],
+                    }
+                )
+    return findings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("files", nargs="*", help="optional explicit file paths")
+    parser.add_argument(
+        "--include-untracked",
+        action="store_true",
+        help="include untracked files when source resolves to worktree",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("auto", "index", "worktree"),
+        default="auto",
+        help="resolve selected file scope from git index or working tree",
+    )
     parser.add_argument(
         "--timeout",
         type=float,
         default=2.0,
-        help="timeout in seconds for staged diff collection",
+        help="timeout in seconds for diff collection",
     )
     args = parser.parse_args()
 
     try:
         ensure_git_repo()
-        diff_text = run_git_diff(args.timeout)
-        if not diff_text.strip():
-            print(
-                json.dumps(
-                    {
-                        "status": "no_staged_changes",
-                        "timeout_seconds": args.timeout,
-                        "findings": [],
-                    },
-                    ensure_ascii=True,
-                    indent=2,
-                )
-            )
-            return 0
+        source, tracked_files, untracked_files = resolve_scope(
+            args.files, args.source, args.include_untracked
+        )
+        diff_text = run_git_diff(tracked_files, source, args.timeout)
 
         findings = scan(diff_text)
-        status = "secrets_detected" if findings else "ok"
+        for file_path in untracked_files:
+            findings.extend(scan_untracked_file(file_path))
+
+        selected_count = len(tracked_files) + len(untracked_files)
+        if selected_count == 0:
+            status = "no_changes"
+        else:
+            status = "secrets_detected" if findings else "ok"
+
         print(
             json.dumps(
                 {
                     "status": status,
+                    "source": source,
                     "timeout_seconds": args.timeout,
+                    "selected_file_count": selected_count,
+                    "tracked_files_scanned": tracked_files,
+                    "untracked_files_scanned": untracked_files,
                     "findings": findings,
                 },
                 ensure_ascii=True,
