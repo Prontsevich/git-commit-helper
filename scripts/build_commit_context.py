@@ -1,38 +1,17 @@
 #!/usr/bin/env python3
-"""Build deterministic git commit context for the skill."""
+"""Build a deterministic JSON snapshot of the pending changes."""
 
 from __future__ import annotations
 
-import json
 import argparse
-import subprocess
+import json
+import os
 import sys
 from typing import Any
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def ensure_git_repo() -> None:
-    result = subprocess.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("not inside a git repository")
-
-
-def run_git(args: list[str]) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
-    return result.stdout.strip()
+import gitscope  # noqa: E402
 
 
 def parse_name_status(raw: str) -> list[dict[str, Any]]:
@@ -43,66 +22,42 @@ def parse_name_status(raw: str) -> list[dict[str, Any]]:
         parts = line.split("\t")
         status = parts[0]
         if status.startswith(("R", "C")) and len(parts) >= 3:
-            entries.append(
-                {
-                    "status": status,
-                    "path": parts[2],
-                    "old_path": parts[1],
-                }
-            )
+            entries.append({"status": status, "path": parts[2], "old_path": parts[1]})
             continue
         if len(parts) >= 2:
-            entries.append(
-                {
-                    "status": status,
-                    "path": parts[1],
-                    "old_path": None,
-                }
-            )
+            entries.append({"status": status, "path": parts[1], "old_path": None})
     return entries
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
 
     try:
-        ensure_git_repo()
-        staged_files = [
-            p
-            for p in run_git(["diff", "--cached", "--name-only", "--diff-filter=ACMRD"]).splitlines()
-            if p.strip()
-        ]
-        unstaged_files = [
-            p
-            for p in run_git(["diff", "--name-only", "--diff-filter=ACMRD"]).splitlines()
-            if p.strip()
-        ]
-        untracked_files = [
-            p
-            for p in run_git(["ls-files", "--others", "--exclude-standard"]).splitlines()
-            if p.strip()
-        ]
+        gitscope.ensure_git_repo()
+        staged_files = gitscope.list_staged_files()
+        unstaged_files = gitscope.list_unstaged_tracked_files()
+        untracked_files = gitscope.list_untracked_files()
 
         if staged_files:
             mode = "staged"
             selected_files = staged_files
-            selected_name_status = parse_name_status(
-                run_git(["diff", "--cached", "--name-status", "--diff-filter=ACMRD"])
-            )
-            shortstat = run_git(["diff", "--cached", "--shortstat"])
+            diff_args = ["diff", "--cached"]
         else:
             mode = "unstaged"
             selected_files = unstaged_files
-            selected_name_status = parse_name_status(
-                run_git(["diff", "--name-status", "--diff-filter=ACMRD"])
-            )
-            shortstat = run_git(["diff", "--shortstat"])
+            diff_args = ["diff"]
+
+        name_status = parse_name_status(
+            gitscope.run_git([*diff_args, "--name-status", f"--diff-filter={gitscope.DIFF_FILTER}"])
+        )
+        shortstat = gitscope.run_git([*diff_args, "--shortstat"])
 
         payload = {
             "mode": mode,
+            "source": "index" if staged_files else "worktree",
             "selected_files": selected_files,
-            "selected_name_status": selected_name_status,
+            "selected_name_status": name_status,
             "selected_count": len(selected_files),
             "untracked_files": untracked_files,
             "untracked_count": len(untracked_files),
