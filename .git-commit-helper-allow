@@ -1,0 +1,7 @@
+# Suppressions for this repo's own checks (see scripts/check_secrets.py).
+# `path:<glob>` skips a file; any other line is a regex matched against a finding's excerpt.
+path:scripts/check_secrets.py
+# Test fixtures in tests/test_commit_helper_scripts.py:
+ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456
+supersecretvalue123
+hunter22@db\.example\.com

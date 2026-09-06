@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
-"""Detect sensitive file names in selected commit scope."""
+"""Detect sensitive file names in the selected commit scope.
+
+`path:<glob>` entries in `.git-commit-helper-allow` at the repo root suppress
+matches for files that legitimately carry a risky name (for example a script
+called check_secrets.py). Suppressed files are counted in the output.
+"""
 
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import json
-import subprocess
+import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import gitscope  # noqa: E402
+
 EXACT_NAMES = {
     ".env",
+    ".envrc",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
     "id_rsa",
     "id_dsa",
     "id_ecdsa",
     "id_ed25519",
     "credentials",
+    "credentials.json",
     "secrets",
+    "service-account.json",
+    "terraform.tfvars",
 }
 
 GLOB_PATTERNS = [
@@ -26,103 +42,32 @@ GLOB_PATTERNS = [
     "*.key",
     "*.p12",
     "*.pfx",
+    "*.jks",
+    "*.keystore",
     "*.kubeconfig",
+    "*.tfstate",
+    "*.tfstate.backup",
     "*secret*",
     "*credential*",
+    "*.private",
 ]
 
-
-def ensure_git_repo() -> None:
-    result = subprocess.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("not inside a git repository")
-
-
-def run_git(args: list[str]) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
-    return result.stdout.strip()
-
-
-def list_staged_files() -> list[str]:
-    return [
-        p
-        for p in run_git(["diff", "--cached", "--name-only", "--diff-filter=ACMRD"]).splitlines()
-        if p.strip()
-    ]
-
-
-def list_unstaged_tracked_files() -> list[str]:
-    return [
-        p
-        for p in run_git(["diff", "--name-only", "--diff-filter=ACMRD"]).splitlines()
-        if p.strip()
-    ]
-
-
-def list_untracked_files() -> list[str]:
-    return [
-        p
-        for p in run_git(["ls-files", "--others", "--exclude-standard"]).splitlines()
-        if p.strip()
-    ]
-
-
-def unique_paths(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        ordered.append(item)
-    return ordered
-
-
-def resolve_scope(
-    explicit_files: list[str], source: str, include_untracked: bool
-) -> tuple[str, list[str]]:
-    if explicit_files:
-        effective_source = "worktree" if source == "auto" else source
-        return effective_source, unique_paths(explicit_files)
-
-    if source == "index":
-        return "index", list_staged_files()
-
-    if source == "worktree":
-        files = list_unstaged_tracked_files()
-        if include_untracked:
-            files.extend(list_untracked_files())
-        return "worktree", unique_paths(files)
-
-    staged = list_staged_files()
-    if staged:
-        return "index", staged
-
-    files = list_unstaged_tracked_files()
-    if include_untracked:
-        files.extend(list_untracked_files())
-    return "worktree", unique_paths(files)
+# Names that match a broad glob above but are almost always safe to commit.
+SAFE_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dist",
+}
 
 
 def classify(path: str) -> list[str]:
     hits: list[str] = []
     name = Path(path).name.lower()
     full = path.lower()
-    for exact in EXACT_NAMES:
+    if name in SAFE_NAMES:
+        return hits
+    for exact in sorted(EXACT_NAMES):
         if name == exact:
             hits.append(f"exact:{exact}")
     for pattern in GLOB_PATTERNS:
@@ -132,7 +77,7 @@ def classify(path: str) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="optional explicit file paths")
     parser.add_argument(
         "--include-untracked",
@@ -145,24 +90,38 @@ def main() -> int:
         default="auto",
         help="resolve selected file scope from git index or working tree",
     )
+    parser.add_argument(
+        "--no-allowlist",
+        action="store_true",
+        help=f"ignore {gitscope.ALLOWLIST_FILE} even if present",
+    )
     args = parser.parse_args()
 
     try:
-        ensure_git_repo()
-        source, files = resolve_scope(args.files, args.source, args.include_untracked)
+        gitscope.ensure_git_repo()
+        source, tracked, untracked = gitscope.resolve_scope(
+            args.files, args.source, args.include_untracked
+        )
+        files = gitscope.unique_paths(tracked + untracked)
+        allow = gitscope.Allowlist.empty() if args.no_allowlist else gitscope.Allowlist.load()
         flagged: list[dict[str, object]] = []
+        suppressed = 0
         for file_path in files:
             rules = classify(file_path)
-            if rules:
-                flagged.append({"file": file_path, "rules": rules})
+            if not rules:
+                continue
+            if allow.allows_path(file_path):
+                suppressed += 1
+                continue
+            flagged.append({"file": file_path, "rules": rules})
 
-        status = "sensitive_files_detected" if flagged else "ok"
         print(
             json.dumps(
                 {
-                    "status": status,
+                    "status": "sensitive_files_detected" if flagged else "ok",
                     "source": source,
                     "checked_files": len(files),
+                    "suppressed_by_allowlist": suppressed,
                     "flagged_files": flagged,
                 },
                 ensure_ascii=True,
