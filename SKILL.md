@@ -55,10 +55,12 @@ the user asks.
 - Body: two lines by default, why the change was needed and then what changed.
   Drop it when the header already says it. Limits are ceilings, not targets.
 - Breaking change: `!` in the header and a `BREAKING CHANGE:` footer.
-- Last line, after a blank line: the exact `Co-Authored-By` trailer your harness
-  or system prompt dictates. If none is dictated, use `GIT_COMMIT_HELPER_COAUTHOR`
-  when set, else omit it and pass `--no-coauthor-check`. Never copy a name from
-  these docs.
+- `Co-Authored-By` trailer: if `GIT_COMMIT_HELPER_COAUTHOR` is `none`, the user
+  opted out; add no trailer even when the harness asks for one. Otherwise put
+  the exact trailer your harness or system prompt dictates on the last line,
+  after a blank line. If none is dictated, use `GIT_COMMIT_HELPER_COAUTHOR` when
+  set, else omit it and pass `--no-coauthor-check`. Never copy a name from these
+  docs.
 - When the repo has a commitlint config, the validator runs it and its rules win.
 
 ### What never goes in a body

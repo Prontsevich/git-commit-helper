@@ -195,6 +195,16 @@ class ValidateCommitMessageTestCase(GitRepoTestCase):
         self.assertEqual(code, 0)
         self.assertTrue(any("Env Model" in w for w in payload["warnings"]))
 
+    def test_coauthor_opt_out_rejects_trailer(self) -> None:
+        opt_out = {"GIT_COMMIT_HELPER_COAUTHOR": "none"}
+        code, payload = self.validate("feat: add thing\n\n" + self.TRAILER + "\n", env=opt_out)
+        self.assertEqual(code, 2)
+        self.assertTrue(any("=none" in e for e in payload["errors"]))
+
+        code, payload = self.validate("feat: add thing\n", env=opt_out)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["warnings"], [])
+
     def test_coauthor_check_can_be_disabled(self) -> None:
         code, payload = self.validate("feat: add thing\n", "--no-coauthor-check")
         self.assertEqual(code, 0)

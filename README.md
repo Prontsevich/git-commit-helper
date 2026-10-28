@@ -45,7 +45,7 @@ target repo has a config; otherwise built-in rules apply.
 ## What the agent does
 
 1. Runs `preflight.py` once: it picks the scope (staged files if any, else unstaged tracked files with untracked files as an option), lists the files, and runs the conflict, sensitive-filename and secret checks. Any finding stops for confirmation. `--split` adds a draft multi-commit plan.
-2. Reads the scoped diff and writes a Conventional Commit message with the `Co-Authored-By` trailer the harness dictates.
+2. Reads the scoped diff and writes a Conventional Commit message with the `Co-Authored-By` trailer the harness dictates, unless the user opted out.
 3. Checks it with `commit.py --dry-run`: message validation (commitlint when the repo has it) and a scope check.
 4. Shows every full message and asks one question (the harness's question dialog when it has one, else a `(yes/no)` prompt).
 5. On approval runs `commit.py` again without `--dry-run`, which stages the explicit paths and commits with hooks enabled.
@@ -54,7 +54,7 @@ Policy details live in `SKILL.md` and `references/commit.md`.
 
 ## Configuration
 
-- `GIT_COMMIT_HELPER_COAUTHOR`: default trailer used in validator hints when the harness dictates none.
+- `GIT_COMMIT_HELPER_COAUTHOR`: default trailer used in validator hints when the harness dictates none. Set it to `none` to never add a trailer: this overrides the harness, and the validator rejects a message that still has one.
 - `.git-commit-helper-allow` at the target repo root: one regex per line matched against a secret finding's excerpt, or `path:<glob>` to skip a file in both the name check and the secret scan. Suppressions are counted in the output, never silent.
 - A commitlint config in the target repo takes precedence over the built-in format rules.
 

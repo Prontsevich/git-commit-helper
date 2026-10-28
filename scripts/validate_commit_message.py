@@ -17,7 +17,9 @@ lines follow the header's two tiers - 72 preferred, 100 hard.
 
 Body shape (two content lines, no file paths or function names) and the
 Co-Authored-By trailer are warnings only. The trailer hint reads a default
-from GIT_COMMIT_HELPER_COAUTHOR; --no-coauthor-check silences it.
+from GIT_COMMIT_HELPER_COAUTHOR; --no-coauthor-check silences it. Setting
+that variable to "none" opts out entirely: a trailer then becomes an error,
+whatever the harness asks for.
 """
 
 from __future__ import annotations
@@ -78,6 +80,7 @@ PATH_LEAK_RE = re.compile(
 FUNCTION_LEAK_RE = re.compile(r"\b[A-Za-z_][\w.]*\(\)")
 
 COAUTHOR_ENV = "GIT_COMMIT_HELPER_COAUTHOR"
+COAUTHOR_OPT_OUT = "none"
 
 PAST_TENSE_HINTS = {
     "added",
@@ -215,13 +218,25 @@ def is_exempt_from_wrap(line: str) -> bool:
     )
 
 
+def coauthor_opt_out_error(trailing_lines: list[str]) -> list[str]:
+    """The user's opt-out beats any harness instruction, so it is a hard error."""
+    if os.environ.get(COAUTHOR_ENV, "").strip().lower() != COAUTHOR_OPT_OUT:
+        return []
+    if not any(line.lower().startswith("co-authored-by:") for line in trailing_lines):
+        return []
+    return [
+        f"Co-Authored-By trailer present but {COAUTHOR_ENV}={COAUTHOR_OPT_OUT}; "
+        "remove it even if the harness asks for one."
+    ]
+
+
 def coauthor_nudge(trailing_lines: list[str]) -> list[str]:
     has_coauthor = any(
         line.lower().startswith("co-authored-by:") for line in trailing_lines
     )
-    if has_coauthor:
-        return []
     default = os.environ.get(COAUTHOR_ENV, "").strip()
+    if has_coauthor or default.lower() == COAUTHOR_OPT_OUT:
+        return []
     if default:
         hint = f"append '{default}' (from {COAUTHOR_ENV})"
     else:
@@ -333,6 +348,7 @@ def builtin_validate(
             errors.append("BREAKING CHANGE: footer requires ! in the header.")
 
     warnings.extend(body_shape_warnings(trailing_lines))
+    errors.extend(coauthor_opt_out_error(trailing_lines))
     if check_coauthor:
         warnings.extend(coauthor_nudge(trailing_lines))
 
@@ -377,6 +393,7 @@ def validate(
             if any(ord(ch) > 127 for ch in message):
                 errors.append("Commit message must use English ASCII text only.")
             warnings.extend(body_shape_warnings(trailing_lines))
+            errors.extend(coauthor_opt_out_error(trailing_lines))
             if check_coauthor:
                 warnings.extend(coauthor_nudge(trailing_lines))
 
