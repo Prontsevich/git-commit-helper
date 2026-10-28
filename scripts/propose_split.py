@@ -179,6 +179,31 @@ def build_groups(files: list[str]) -> list[dict[str, object]]:
     return result
 
 
+def draft_plan(files: list[str]) -> dict[str, object]:
+    """Review-friendly grouping plus the minimal fallback for the same files."""
+    groups = build_groups(files)
+    generated = [g for g in groups if g["kind"] == "generated"]
+    rest_files = [p for g in groups if g["kind"] != "generated" for p in g["files"]]
+    minimal: list[dict[str, object]] = []
+    if rest_files:
+        minimal.append(
+            {
+                "kind": "source",
+                "domain": "all",
+                "suggested_type": "feat",
+                "suggested_scope": None,
+                "header_stub": "feat: ",
+                "files": rest_files,
+            }
+        )
+    minimal.extend(generated)
+    return {
+        "multi_commit_recommended": len(groups) > 1,
+        "review_friendly": groups,
+        "minimal": minimal,
+    }
+
+
 def render_text(plan: dict[str, object]) -> str:
     lines: list[str] = []
     groups = plan["review_friendly"]
@@ -227,31 +252,11 @@ def main() -> int:
             args.files, args.source, args.include_untracked
         )
         files = gitscope.unique_paths(tracked + untracked)
-        groups = build_groups(files)
-
-        generated = [g for g in groups if g["kind"] == "generated"]
-        rest_files = [p for g in groups if g["kind"] != "generated" for p in g["files"]]
-        minimal: list[dict[str, object]] = []
-        if rest_files:
-            minimal.append(
-                {
-                    "kind": "source",
-                    "domain": "all",
-                    "suggested_type": "feat",
-                    "suggested_scope": None,
-                    "header_stub": "feat: ",
-                    "files": rest_files,
-                }
-            )
-        minimal.extend(generated)
-
         plan: dict[str, object] = {
             "status": "ok" if files else "no_changes",
             "source": source,
             "selected_count": len(files),
-            "multi_commit_recommended": len(groups) > 1,
-            "review_friendly": groups,
-            "minimal": minimal,
+            **draft_plan(files),
         }
         if args.format == "text":
             print(render_text(plan))

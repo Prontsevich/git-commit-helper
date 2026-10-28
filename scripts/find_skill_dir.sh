@@ -33,7 +33,8 @@ search_known_roots() {
     home="${HOME:-$USERPROFILE}"
     for root in \
         ".agents/skills" ".claude/skills" ".codex/skills" ".cursor/skills" \
-        ".gemini/skills" ".hermes/skills" ".config/opencode/skills" ".copilot/skills"; do
+        ".gemini/skills" ".hermes/skills" ".config/opencode/skills" ".copilot/skills" \
+        ".pi/agent/skills" ".omp/agent/skills"; do
         candidate="$home/$root/git-commit-helper"
         if [ -f "$candidate/SKILL.md" ]; then
             (cd "$candidate" && pwd -P)

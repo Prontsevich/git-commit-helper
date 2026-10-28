@@ -150,30 +150,45 @@ def detect_commitlint(root: str) -> bool:
     return False
 
 
+def local_commitlint(root: str) -> list[str] | None:
+    """The repo's own commitlint binary, if installed."""
+    bin_dir = Path(root) / "node_modules" / ".bin"
+    names = ("commitlint.cmd", "commitlint") if os.name == "nt" else ("commitlint",)
+    for name in names:
+        if (bin_dir / name).is_file():
+            return [str(bin_dir / name)]
+    return None
+
+
 def run_commitlint(message: str, root: str, timeout: float = 20.0) -> dict[str, object]:
     """Run the repo's commitlint over `message` via stdin.
 
-    Returns {"available": False} when commitlint cannot be resolved/run, so
-    the caller can fall back to the built-in validator.
+    A local node_modules binary runs directly; only without one does npx get
+    probed first, since its "not installed" exit cannot be told apart from a
+    lint failure. Returns {"available": False} when commitlint cannot be
+    resolved, so the caller can fall back to the built-in validator.
     """
-    try:
-        version = subprocess.run(
-            ["npx", "--no-install", "commitlint", "--version"],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {"available": False}
-    if version.returncode != 0:
-        return {"available": False}
+    command = local_commitlint(root)
+    if command is None:
+        try:
+            version = subprocess.run(
+                ["npx", "--no-install", "commitlint", "--version"],
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return {"available": False}
+        if version.returncode != 0:
+            return {"available": False}
+        command = ["npx", "--no-install", "commitlint"]
 
     try:
         proc = subprocess.run(
-            ["npx", "--no-install", "commitlint"],
+            command,
             cwd=root,
             input=message,
             stdout=subprocess.PIPE,
@@ -184,6 +199,8 @@ def run_commitlint(message: str, root: str, timeout: float = 20.0) -> dict[str, 
         )
     except subprocess.TimeoutExpired:
         return {"available": True, "passed": False, "output": "commitlint timed out."}
+    except OSError:
+        return {"available": False}
 
     output = (proc.stdout + proc.stderr).strip()
     return {"available": True, "passed": proc.returncode == 0, "output": output}

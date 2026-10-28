@@ -122,7 +122,7 @@ class ScriptTestCase(GitRepoTestCase):
 
         self.write_file("config.py", 'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n')
 
-        code, payload = self.run_script("check_sensitive_regex_staged.py")
+        code, payload = self.run_script("check_secrets.py")
         self.assertEqual(code, 2)
         self.assertEqual(payload["status"], "secrets_detected")
         self.assertEqual(payload["source"], "worktree")
@@ -131,12 +131,12 @@ class ScriptTestCase(GitRepoTestCase):
     def test_regex_scan_can_include_untracked_files(self) -> None:
         self.write_file("secrets.txt", 'password = "supersecretvalue123"\n')
 
-        code_default, payload_default = self.run_script("check_sensitive_regex_staged.py")
+        code_default, payload_default = self.run_script("check_secrets.py")
         self.assertEqual(code_default, 0)
         self.assertEqual(payload_default["status"], "no_changes")
 
         code_untracked, payload_untracked = self.run_script(
-            "check_sensitive_regex_staged.py", "--include-untracked"
+            "check_secrets.py", "--include-untracked"
         )
         self.assertEqual(code_untracked, 2)
         self.assertEqual(payload_untracked["status"], "secrets_detected")
@@ -237,6 +237,25 @@ class ValidateCommitMessageTestCase(GitRepoTestCase):
         self.assertEqual(payload["mode"], "builtin")
         self.assertTrue(any("commitlint" in w for w in payload["warnings"]))
 
+    @unittest.skipIf(os.name == "nt", "fake binary is a POSIX script")
+    def test_local_commitlint_binary_is_preferred(self) -> None:
+        self.write_file("commitlint.config.js", "module.exports = {extends: []};\n")
+        fake = self.repo / "node_modules" / ".bin" / "commitlint"
+        fake.parent.mkdir(parents=True)
+        fake.write_text(
+            "#!/bin/sh\n"
+            "if grep -q bad; then echo 'fake commitlint: bad subject'; exit 1; fi\n"
+        )
+        fake.chmod(0o755)
+
+        code, payload = self.validate("feat: add thing\n\n" + self.TRAILER + "\n")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["mode"], "commitlint")
+
+        code, payload = self.validate("feat: bad thing\n\n" + self.TRAILER + "\n")
+        self.assertEqual(code, 2)
+        self.assertIn("fake commitlint", payload["errors"][0])
+
     def test_no_commitlint_flag_skips_detection(self) -> None:
         self.write_file("commitlint.config.js", "module.exports = {extends: []};\n")
         code, payload = self.validate(
@@ -303,13 +322,42 @@ class SecretsAndSensitiveFilesTestCase(GitRepoTestCase):
         )
         self.assertEqual(code, 2)
 
-    def test_legacy_alias_still_works(self) -> None:
-        self.write_file("cfg.py", 'password = "supersecretvalue123"\n')
-        code, payload = self.run_script(
-            "check_sensitive_regex_staged.py", "--include-untracked"
+    def test_non_ascii_paths_are_scanned(self) -> None:
+        # git quotes non-ASCII names by default; the checks must still see the file.
+        content = (
+            "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> main\n"
+            'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n'
         )
+        self.write_file("заметки.md", content)
+        self.git("add", "заметки.md")
+
+        code, payload = self.run_script("check_conflicts.py")
         self.assertEqual(code, 2)
-        self.assertEqual(payload["status"], "secrets_detected")
+        self.assertEqual(payload["skipped_unreadable_files"], 0)
+        self.assertEqual(payload["conflicts"][0]["file"], "заметки.md")
+
+        code, payload = self.run_script("check_secrets.py")
+        self.assertEqual(code, 2)
+        self.assertIn("заметки.md", {f["file"] for f in payload["findings"]})
+
+    def test_spaced_path_reported_without_trailing_tab(self) -> None:
+        self.write_file("my notes.txt", 'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n')
+        self.git("add", "my notes.txt")
+        code, payload = self.run_script("check_secrets.py")
+        self.assertEqual(code, 2)
+        self.assertEqual({f["file"] for f in payload["findings"]}, {"my notes.txt"})
+
+        self.write_file(".git-commit-helper-allow", "path:my notes.txt\n")
+        code, payload = self.run_script("check_secrets.py")
+        self.assertEqual(code, 0)
+
+    def test_timeout_covers_the_regex_pass(self) -> None:
+        self.write_file("big.txt", "value = 1\n" * 20000)
+        code, payload = self.run_script(
+            "check_secrets.py", "--include-untracked", "--timeout", "0"
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(payload["status"], "timeout")
 
 
 class ProposeSplitTestCase(GitRepoTestCase):
@@ -355,6 +403,128 @@ class ProposeSplitTestCase(GitRepoTestCase):
             cwd=self.repo, stdout=subprocess.PIPE, text=True, check=True,
         )
         self.assertIn("feat(orders): <summary>", result.stdout)
+
+
+class PreflightTestCase(GitRepoTestCase):
+    def test_staged_scope_ignores_unstaged_and_untracked(self) -> None:
+        self.write_file("app.py", "print('a')\n")
+        self.git("add", "app.py")
+        self.write_file("README.md", "changed\n")
+        self.write_file("new.txt", "new\n")
+
+        code, payload = self.run_script("preflight.py")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["source"], "index")
+        self.assertEqual(payload["diff_command"], "git diff --cached")
+        self.assertEqual(payload["files"], [{"path": "app.py", "status": "A", "added": "1", "deleted": "0"}])
+        self.assertEqual(payload["untracked"], [])
+        self.assertEqual(payload["recent_subjects"], ["chore: init"])
+
+    def test_worktree_scope_checks_untracked_files(self) -> None:
+        self.write_file("README.md", "changed\n")
+        self.write_file(".env", 'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n')
+
+        code, payload = self.run_script("preflight.py")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "findings")
+        self.assertEqual(payload["source"], "worktree")
+        self.assertEqual(payload["untracked"], [".env"])
+        self.assertEqual(payload["checks"]["sensitive_files"][0]["file"], ".env")
+        self.assertEqual(payload["checks"]["secrets"][0]["file"], ".env")
+
+    def test_deleted_files_are_listed_but_not_read(self) -> None:
+        (self.repo / "README.md").unlink()
+        code, payload = self.run_script("preflight.py")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["files"][0]["status"], "D")
+        self.assertEqual(payload["checks"]["unreadable_files"], 0)
+
+    def test_reports_partially_staged_files(self) -> None:
+        self.write_file("README.md", "staged\n")
+        self.git("add", "README.md")
+        self.write_file("README.md", "staged\nand more\n")
+        code, payload = self.run_script("preflight.py")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["partially_staged"], ["README.md"])
+
+    def test_split_and_empty_scope(self) -> None:
+        code, payload = self.run_script("preflight.py")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "no_changes")
+
+        self.write_file("src/core/http.ts", "x\n")
+        self.write_file("src/orders/store.ts", "x\n")
+        code, payload = self.run_script("preflight.py", "--split")
+        self.assertTrue(payload["split"]["multi_commit_recommended"])
+
+
+class CommitTestCase(GitRepoTestCase):
+    MESSAGE = "docs: update readme\n\nCo-Authored-By: Some Model <noreply@example.com>\n"
+
+    def head_subject(self) -> str:
+        return self.git("log", "-1", "--format=%s").stdout.strip()
+
+    def test_commits_explicit_worktree_paths(self) -> None:
+        self.write_file("README.md", "changed\n")
+        self.write_file("guide.md", "new\n")
+        self.write_file("other.txt", "left alone\n")
+
+        code, payload = self.run_script("commit.py", "--message", self.MESSAGE, "README.md", "guide.md")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "committed")
+        self.assertEqual(self.head_subject(), "docs: update readme")
+        status = self.git("status", "--porcelain").stdout
+        self.assertEqual(status, "?? other.txt\n")
+
+    def test_dry_run_changes_nothing(self) -> None:
+        self.write_file("README.md", "changed\n")
+        code, payload = self.run_script("commit.py", "--dry-run", "--message", self.MESSAGE, "README.md")
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(self.git("diff", "--cached", "--name-only").stdout, "")
+        self.assertEqual(self.head_subject(), "chore: init")
+
+    def test_invalid_message_blocks_commit(self) -> None:
+        self.write_file("README.md", "changed\n")
+        code, payload = self.run_script("commit.py", "--message", "updated stuff.", "README.md")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "invalid")
+        self.assertEqual(self.head_subject(), "chore: init")
+
+    def test_refuses_when_index_holds_other_files(self) -> None:
+        self.write_file("app.py", "x\n")
+        self.git("add", "app.py")
+        self.write_file("README.md", "changed\n")
+        code, payload = self.run_script("commit.py", "--message", self.MESSAGE, "README.md")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "scope_mismatch")
+        self.assertIn("app.py", payload["error"])
+        self.assertEqual(self.head_subject(), "chore: init")
+
+    def test_refuses_path_without_changes(self) -> None:
+        code, payload = self.run_script("commit.py", "--message", self.MESSAGE, "README.md")
+        self.assertEqual(code, 2)
+        self.assertIn("No changes", payload["error"])
+
+    def test_commits_staged_scope_as_is(self) -> None:
+        self.write_file("README.md", "staged\n")
+        self.git("add", "README.md")
+        self.write_file("README.md", "staged\nnot reviewed\n")
+        code, payload = self.run_script("commit.py", "--message", self.MESSAGE, "README.md")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(self.git("show", "HEAD:README.md").stdout, "staged\n")
+
+    @unittest.skipIf(os.name == "nt", "hook is a POSIX script")
+    def test_failed_hook_is_reported(self) -> None:
+        hook = self.repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\necho 'lint failed'\nexit 1\n")
+        hook.chmod(0o755)
+        self.write_file("README.md", "changed\n")
+        code, payload = self.run_script("commit.py", "--message", self.MESSAGE, "README.md")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "commit_failed")
+        self.assertIn("lint failed", payload["output"])
 
 
 if __name__ == "__main__":

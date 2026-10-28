@@ -76,6 +76,25 @@ def classify(path: str) -> list[str]:
     return hits
 
 
+def check(files: list[str], allow: gitscope.Allowlist) -> dict[str, object]:
+    flagged: list[dict[str, object]] = []
+    suppressed = 0
+    for file_path in files:
+        rules = classify(file_path)
+        if not rules:
+            continue
+        if allow.allows_path(file_path):
+            suppressed += 1
+            continue
+        flagged.append({"file": file_path, "rules": rules})
+    return {
+        "status": "sensitive_files_detected" if flagged else "ok",
+        "checked_files": len(files),
+        "suppressed_by_allowlist": suppressed,
+        "flagged_files": flagged,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="optional explicit file paths")
@@ -104,31 +123,9 @@ def main() -> int:
         )
         files = gitscope.unique_paths(tracked + untracked)
         allow = gitscope.Allowlist.empty() if args.no_allowlist else gitscope.Allowlist.load()
-        flagged: list[dict[str, object]] = []
-        suppressed = 0
-        for file_path in files:
-            rules = classify(file_path)
-            if not rules:
-                continue
-            if allow.allows_path(file_path):
-                suppressed += 1
-                continue
-            flagged.append({"file": file_path, "rules": rules})
-
-        print(
-            json.dumps(
-                {
-                    "status": "sensitive_files_detected" if flagged else "ok",
-                    "source": source,
-                    "checked_files": len(files),
-                    "suppressed_by_allowlist": suppressed,
-                    "flagged_files": flagged,
-                },
-                ensure_ascii=True,
-                indent=2,
-            )
-        )
-        return 2 if flagged else 0
+        result = {"source": source, **check(files, allow)}
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 2 if result["flagged_files"] else 0
     except RuntimeError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

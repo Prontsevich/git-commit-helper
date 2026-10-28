@@ -55,6 +55,35 @@ def scan_conflicts(text: str) -> list[dict[str, object]]:
     return findings
 
 
+def check(files: list[str], source: str) -> dict[str, object]:
+    conflicts: list[dict[str, object]] = []
+    checked = 0
+    skipped_binary = 0
+    skipped_unreadable = 0
+
+    for item in files:
+        payload = gitscope.load_bytes(item, source)
+        if payload is None:
+            skipped_unreadable += 1
+            continue
+        if gitscope.is_binary(payload):
+            skipped_binary += 1
+            continue
+        checked += 1
+        text = payload.decode("utf-8", errors="ignore")
+        for finding in scan_conflicts(text):
+            conflicts.append({"file": item, **finding})
+
+    return {
+        "status": "conflicts" if conflicts else "ok",
+        "source": source,
+        "checked_files": checked,
+        "skipped_binary_files": skipped_binary,
+        "skipped_unreadable_files": skipped_unreadable,
+        "conflicts": conflicts,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="optional explicit file paths")
@@ -76,40 +105,9 @@ def main() -> int:
         source, tracked, untracked = gitscope.resolve_scope(
             args.files, args.source, args.include_untracked
         )
-        files = gitscope.unique_paths(tracked + untracked)
-        conflicts: list[dict[str, object]] = []
-        checked = 0
-        skipped_binary = 0
-        skipped_unreadable = 0
-
-        for item in files:
-            payload = gitscope.load_bytes(item, source)
-            if payload is None:
-                skipped_unreadable += 1
-                continue
-            if gitscope.is_binary(payload):
-                skipped_binary += 1
-                continue
-            checked += 1
-            text = payload.decode("utf-8", errors="ignore")
-            for finding in scan_conflicts(text):
-                conflicts.append({"file": item, **finding})
-
-        print(
-            json.dumps(
-                {
-                    "status": "conflicts" if conflicts else "ok",
-                    "source": source,
-                    "checked_files": checked,
-                    "skipped_binary_files": skipped_binary,
-                    "skipped_unreadable_files": skipped_unreadable,
-                    "conflicts": conflicts,
-                },
-                ensure_ascii=True,
-                indent=2,
-            )
-        )
-        return 2 if conflicts else 0
+        result = check(gitscope.unique_paths(tracked + untracked), source)
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 2 if result["conflicts"] else 0
     except RuntimeError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

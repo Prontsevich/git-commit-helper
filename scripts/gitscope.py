@@ -39,6 +39,8 @@ def run_git(args: list[str]) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
         check=False,
     )
     if result.returncode != 0:
@@ -62,20 +64,26 @@ def run_git_bytes(args: list[str]) -> bytes:
     return result.stdout
 
 
-def _lines(raw: str) -> list[str]:
-    return [p for p in raw.splitlines() if p.strip()]
+def run_git_z(args: list[str]) -> list[str]:
+    """Run a git command with -z output and return its NUL-separated fields.
+
+    Without -z git C-quotes any path with non-ASCII or special characters
+    ("\\320\\267..."), which no longer matches the file on disk.
+    """
+    raw = run_git_bytes([*args, "-z"])
+    return [p for p in raw.decode("utf-8", errors="surrogateescape").split("\0") if p]
 
 
 def list_staged_files() -> list[str]:
-    return _lines(run_git(["diff", "--cached", "--name-only", f"--diff-filter={DIFF_FILTER}"]))
+    return run_git_z(["diff", "--cached", "--name-only", f"--diff-filter={DIFF_FILTER}"])
 
 
 def list_unstaged_tracked_files() -> list[str]:
-    return _lines(run_git(["diff", "--name-only", f"--diff-filter={DIFF_FILTER}"]))
+    return run_git_z(["diff", "--name-only", f"--diff-filter={DIFF_FILTER}"])
 
 
 def list_untracked_files() -> list[str]:
-    return _lines(run_git(["ls-files", "--others", "--exclude-standard"]))
+    return run_git_z(["ls-files", "--others", "--exclude-standard"])
 
 
 def unique_paths(items: list[str]) -> list[str]:

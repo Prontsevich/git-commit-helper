@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,13 +79,69 @@ PATTERNS = [
 ]
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+# Lines between deadline checks: keeps the clock cheap on large files.
+DEADLINE_STRIDE = 1000
 
 
-def run_git_diff(files: list[str], source: str, timeout_seconds: float) -> str:
+class ScanTimeout(Exception):
+    pass
+
+
+class Deadline:
+    """One time budget for diff collection and the regex pass together."""
+
+    def __init__(self, seconds: float):
+        self.end = time.monotonic() + seconds
+
+    def remaining(self) -> float:
+        left = self.end - time.monotonic()
+        if left <= 0:
+            raise ScanTimeout()
+        return left
+
+    def check(self, counter: int) -> None:
+        if counter % DEADLINE_STRIDE == 0:
+            self.remaining()
+
+
+def unquote_c(text: str) -> str:
+    """Decode a path git printed in C-style quotes."""
+    out = bytearray()
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt in "01234567":
+                out.append(int(text[i + 1 : i + 4], 8))
+                i += 4
+                continue
+            out.append(C_ESCAPES.get(nxt, ord(nxt)))
+            i += 2
+            continue
+        out.extend(ch.encode("utf-8", errors="surrogateescape"))
+        i += 1
+    return out.decode("utf-8", errors="surrogateescape")
+
+
+def diff_new_path(header: str) -> str:
+    """Path from a `+++ b/<path>` line.
+
+    git appends a tab after names that contain spaces and C-quotes names with
+    quotes, backslashes or control characters even with core.quotePath off.
+    """
+    raw = header[4:].rstrip("\t")
+    if raw.startswith('"') and raw.endswith('"'):
+        raw = unquote_c(raw[1:-1])
+    return raw[2:] if raw.startswith("b/") else raw
+
+
+def run_git_diff(files: list[str], source: str, deadline: Deadline) -> str:
     if not files:
         return ""
 
-    cmd = ["git", "diff"]
+    cmd = ["git", "-c", "core.quotePath=false", "diff"]
     if source == "index":
         cmd.append("--cached")
     cmd.extend(["--unified=0", "--no-color", "--diff-filter=ACMR", "--", *files])
@@ -94,8 +151,10 @@ def run_git_diff(files: list[str], source: str, timeout_seconds: float) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
         check=False,
-        timeout=timeout_seconds,
+        timeout=deadline.remaining(),
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"{' '.join(cmd)} failed")
@@ -110,14 +169,15 @@ def match_line(file: str, lineno: int, text: str) -> list[dict[str, object]]:
     ]
 
 
-def scan_diff(diff_text: str) -> list[dict[str, object]]:
+def scan_diff(diff_text: str, deadline: Deadline) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     current_file = ""
     current_new_line = 0
 
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            current_file = line[6:]
+    for counter, line in enumerate(diff_text.splitlines()):
+        deadline.check(counter)
+        if line.startswith("+++ "):
+            current_file = diff_new_path(line)
             continue
         if line.startswith("@@"):
             match = HUNK_RE.match(line)
@@ -134,13 +194,15 @@ def scan_diff(diff_text: str) -> list[dict[str, object]]:
     return findings
 
 
-def scan_whole_file(path: str) -> list[dict[str, object]]:
+def scan_whole_file(path: str, deadline: Deadline) -> list[dict[str, object]]:
+    deadline.remaining()
     payload = gitscope.load_bytes(path, "worktree")
     if payload is None or gitscope.is_binary(payload):
         return []
     text = payload.decode("utf-8", errors="ignore")
     findings: list[dict[str, object]] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
+        deadline.check(lineno)
         findings.extend(match_line(path, lineno, line))
     return findings
 
@@ -158,6 +220,38 @@ def apply_allowlist(
         else:
             kept.append(finding)
     return kept, suppressed
+
+
+def scan(
+    source: str,
+    tracked_files: list[str],
+    untracked_files: list[str],
+    allow: gitscope.Allowlist,
+    timeout: float,
+) -> dict[str, object]:
+    """Scan the scope; a timeout is reported as a status, not raised."""
+    selected_count = len(tracked_files) + len(untracked_files)
+    deadline = Deadline(timeout)
+    try:
+        findings = scan_diff(run_git_diff(tracked_files, source, deadline), deadline)
+        for file_path in untracked_files:
+            findings.extend(scan_whole_file(file_path, deadline))
+    except (ScanTimeout, subprocess.TimeoutExpired):
+        return {"status": "timeout", "timeout_seconds": timeout, "findings": []}
+
+    findings, suppressed = apply_allowlist(findings, allow)
+    if selected_count == 0:
+        status = "no_changes"
+    else:
+        status = "secrets_detected" if findings else "ok"
+    return {
+        "status": status,
+        "source": source,
+        "timeout_seconds": timeout,
+        "selected_file_count": selected_count,
+        "suppressed_by_allowlist": suppressed,
+        "findings": findings,
+    }
 
 
 def main() -> int:
@@ -178,7 +272,7 @@ def main() -> int:
         "--timeout",
         type=float,
         default=2.0,
-        help="timeout in seconds for diff collection",
+        help="time budget in seconds for diff collection and the regex pass",
     )
     parser.add_argument(
         "--no-allowlist",
@@ -192,47 +286,12 @@ def main() -> int:
         source, tracked_files, untracked_files = gitscope.resolve_scope(
             args.files, args.source, args.include_untracked
         )
-        diff_text = run_git_diff(tracked_files, source, args.timeout)
-
-        findings = scan_diff(diff_text)
-        for file_path in untracked_files:
-            findings.extend(scan_whole_file(file_path))
-
         allow = gitscope.Allowlist.empty() if args.no_allowlist else gitscope.Allowlist.load()
-        findings, suppressed = apply_allowlist(findings, allow)
-
-        selected_count = len(tracked_files) + len(untracked_files)
-        if selected_count == 0:
-            status = "no_changes"
-        else:
-            status = "secrets_detected" if findings else "ok"
-
-        print(
-            json.dumps(
-                {
-                    "status": status,
-                    "source": source,
-                    "timeout_seconds": args.timeout,
-                    "selected_file_count": selected_count,
-                    "tracked_files_scanned": tracked_files,
-                    "untracked_files_scanned": untracked_files,
-                    "suppressed_by_allowlist": suppressed,
-                    "findings": findings,
-                },
-                ensure_ascii=True,
-                indent=2,
-            )
-        )
-        return 2 if findings else 0
-    except subprocess.TimeoutExpired:
-        print(
-            json.dumps(
-                {"status": "timeout", "timeout_seconds": args.timeout, "findings": []},
-                ensure_ascii=True,
-                indent=2,
-            )
-        )
-        return 3
+        result = scan(source, tracked_files, untracked_files, allow, args.timeout)
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        if result["status"] == "timeout":
+            return 3
+        return 2 if result["findings"] else 0
     except RuntimeError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1
