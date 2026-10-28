@@ -23,7 +23,7 @@ CI (`.github/workflows/test.yml`) runs the same on Linux, macOS and Windows.
 
 - All code, comments, commit messages and docs in English.
 - Scripts: shebang, executable bit, `argparse`, JSON on stdout, exit `0` ok / `2` findings / `1` error. Reuse `scripts/gitscope.py` for scope resolution instead of copying git helpers.
-- Every behavior change to a script comes with a test in `tests/test_commit_helper_scripts.py` (write the failing test first).
+- Every behavior change to a script comes with a test in `tests/test_commit_helper_scripts.py`; write it alongside the code and run the full suite before committing.
 - Docs must stay harness-neutral: refer to `$SKILL_DIR`, never to `~/.claude/...` or another harness path; never hardcode a model name in a trailer example.
 - Markdown: ATX headings, `-` bullets, fenced blocks with a language tag, sentence-case headings.
 - Keep `SKILL.md` short; long reference material goes to `references/`.
