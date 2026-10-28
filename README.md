@@ -44,11 +44,11 @@ target repo has a config; otherwise built-in rules apply.
 
 ## What the agent does
 
-1. Reads the pending changes (`build_commit_context.py`) and picks the scope: staged files if any, else unstaged tracked files; untracked files become an option of the commit question.
-2. Runs `check_conflicts.py`, `check_sensitive_files.py` and `check_secrets.py` on that scope and stops for confirmation on any finding.
-3. For changes spanning several domains, drafts a multi-commit plan with `propose_split.py`.
-4. Writes a Conventional Commit message, appends the `Co-Authored-By` trailer the harness dictates, validates it with `validate_commit_message.py`.
-5. Shows every full message and asks one question (the harness's question dialog when it has one, else a `(yes/no)` prompt), and only then runs `git add <explicit paths>` and `git commit -F`.
+1. Runs `preflight.py` once: it picks the scope (staged files if any, else unstaged tracked files with untracked files as an option), lists the files, and runs the conflict, sensitive-filename and secret checks. Any finding stops for confirmation. `--split` adds a draft multi-commit plan.
+2. Reads the scoped diff and writes a Conventional Commit message with the `Co-Authored-By` trailer the harness dictates.
+3. Checks it with `commit.py --dry-run`: message validation (commitlint when the repo has it) and a scope check.
+4. Shows every full message and asks one question (the harness's question dialog when it has one, else a `(yes/no)` prompt).
+5. On approval runs `commit.py` again without `--dry-run`, which stages the explicit paths and commits with hooks enabled.
 
 Policy details live in `SKILL.md` and `references/commit.md`.
 
@@ -65,6 +65,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 python3 -m unittest tests.test_commit_helper_scripts.ValidateCommitMessageTestCase
 ```
 
-Scripts share `scripts/gitscope.py` for scope resolution. Each script prints
-JSON and exits `0` (ok), `2` (findings), `1` (error); the secret scanner exits
-`3` on timeout.
+Scripts share `scripts/gitscope.py` for scope resolution. `preflight.py` and
+`commit.py` compose the single-purpose check scripts, which stay runnable on
+their own. Each script prints JSON and exits `0` (ok), `2` (findings), `1`
+(error); `preflight.py` and `check_secrets.py` exit `3` on a secret-scan timeout.
