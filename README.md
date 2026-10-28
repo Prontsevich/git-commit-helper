@@ -5,8 +5,8 @@ staged-first scoping, secret and conflict checks, Conventional Commits with a
 validator, and an explicit confirmation before anything is written.
 
 The skill is harness-agnostic. The same folder works in Claude Code, Codex,
-Cursor, Gemini CLI, Hermes, OpenCode and Copilot; only the install location
-differs.
+Cursor, Gemini CLI, Hermes, OpenCode, Copilot, pi and omp; only the install
+location differs.
 
 ## Install
 
@@ -28,7 +28,7 @@ Targets and their paths:
 | `claude` | `~/.claude/skills/git-commit-helper` |
 | `cursor` | `~/.cursor/skills/git-commit-helper` |
 | `codex` | `~/.codex/skills/git-commit-helper` |
-| `agents` | `~/.agents/skills/git-commit-helper` (shared by Codex, Copilot, Gemini) |
+| `agents` | `~/.agents/skills/git-commit-helper` (shared by Codex, Copilot, Gemini, pi, omp) |
 | `gemini` | `~/.gemini/skills/git-commit-helper` |
 | `hermes` | `~/.hermes/skills/git-commit-helper` |
 | `opencode` | `~/.config/opencode/skills/git-commit-helper` |
@@ -44,11 +44,11 @@ target repo has a config; otherwise built-in rules apply.
 
 ## What the agent does
 
-1. Reads the pending changes (`build_commit_context.py`) and picks the scope: staged files if any, else unstaged tracked files, untracked only after a `yes`.
+1. Reads the pending changes (`build_commit_context.py`) and picks the scope: staged files if any, else unstaged tracked files; untracked files become an option of the commit question.
 2. Runs `check_conflicts.py`, `check_sensitive_files.py` and `check_secrets.py` on that scope and stops for confirmation on any finding.
-3. For changes spanning several domains, drafts a multi-commit plan with `propose_split.py` and asks which plan to use.
+3. For changes spanning several domains, drafts a multi-commit plan with `propose_split.py`.
 4. Writes a Conventional Commit message, appends the `Co-Authored-By` trailer the harness dictates, validates it with `validate_commit_message.py`.
-5. Shows the full message, asks `Create commit with this message? (yes/no)`, and only then runs `git add <explicit paths>` and `git commit -F`.
+5. Shows every full message and asks one question (the harness's question dialog when it has one, else a `(yes/no)` prompt), and only then runs `git add <explicit paths>` and `git commit -F`.
 
 Policy details live in `SKILL.md` and `references/commit.md`.
 

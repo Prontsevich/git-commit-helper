@@ -1,6 +1,6 @@
 ---
 name: git-commit-helper
-description: Use when a user asks to prepare, draft, review, or execute a git commit, or to split pending changes into commits. Works in any agent harness (Claude Code, Codex, Cursor, Gemini, Hermes, OpenCode, Copilot).
+description: Use when a user asks to prepare, draft, review, or execute a git commit, or to split pending changes into commits. Works in any agent harness (Claude Code, Codex, Cursor, Gemini, Hermes, OpenCode, Copilot, pi, omp).
 ---
 
 # Git Commit Helper
@@ -17,6 +17,7 @@ directory that contains this `SKILL.md`:
 - Otherwise resolve it once with `scripts/find_skill_dir.sh` from any known install, or check the
   usual locations: `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills`,
   `~/.gemini/skills`, `~/.hermes/skills`, `~/.config/opencode/skills`, `~/.copilot/skills`,
+  `~/.pi/agent/skills`, `~/.omp/agent/skills`,
   plus `.claude/skills` and `.agents/skills` inside the project. On Windows replace `~` with
   `%USERPROFILE%`.
 
@@ -34,13 +35,13 @@ Helpers (all print JSON, exit 0 on ok, 2 on findings, 1 on error):
 
 1. Run read-only inspection first.
 2. If staged files exist, scope analysis and commit to staged files only (`--source index`).
-3. If no staged files exist, analyze unstaged tracked files and ask whether to include untracked files.
-4. Include untracked files only after explicit user `yes` (`--include-untracked`).
+3. If no staged files exist, analyze unstaged tracked files; offer untracked files as an option of the commit question.
+4. Include untracked files only when the user picks an option that lists them (`--include-untracked`).
 5. If unresolved merge conflict markers are detected, require explicit user confirmation before continuing.
 6. Run sensitive file-name checks in the selected scope; require explicit user confirmation if matches are found.
 7. Run regex secret checks in the selected scope (`--source index|worktree`). If timeout occurs, continue with filename checks only after explicit user confirmation.
 8. Propose a full English Conventional Commit message. Append the `Co-Authored-By` trailer your harness dictates (see **Co-Authored-By trailer**), then validate with `validate_commit_message.py`.
-9. Request explicit `yes` or `no` for the full validated message before running `git commit`.
+9. Ask one question per step and get explicit approval of the full validated message(s) before running `git commit`, via the harness's question tool when it has one (see **Confirmation text** in `references/commit.md`).
 10. Never use `git add .`; always use explicit file paths.
 11. If user requests cancel/stop, end workflow without running write commands.
 
@@ -98,9 +99,9 @@ Rules:
 When changes touch **multiple layers or domains**, do not default to a single commit.
 Run `propose_split.py` for a draft grouping, then read **Commit split strategy** and
 **Scope selection** in `references/commit.md`, and propose a **multi-commit plan**
-(message + explicit file list per commit). Wait for user approval.
+(message + explicit file list per commit).
 
-Offer two options unless the user already chose:
+Offer both plans as options of one question unless the user already chose:
 1. **Minimal**: one source commit (+ optional separate commit for generated artifacts if applicable)
 2. **Review-friendly**: infrastructure -> per-domain integration -> generated artifacts last
 

@@ -15,9 +15,9 @@ Follow this file as the single source of truth for commit behavior.
 2. Determine commit scope:
    - If staged files exist: use staged files only (`--source index`).
    - If no staged files exist: use unstaged tracked files (`--source worktree`).
-   - Ask whether to include untracked files:
-     - `Include untracked files in this commit? (yes/no)`
-   - Include untracked files only after explicit `yes` and pass `--include-untracked`.
+   - If untracked files exist, run the checks below with `--include-untracked` and offer
+     them as an option of the commit question (see **Confirmation text**).
+   - Include untracked files only when the chosen option lists them.
 3. Run mandatory checks on selected files:
    - Conflict markers: `python3 $SKILL_DIR/scripts/check_conflicts.py --source <index|worktree> [--include-untracked]`
    - Sensitive filenames: `python3 $SKILL_DIR/scripts/check_sensitive_files.py --source <index|worktree> [--include-untracked]`
@@ -29,21 +29,20 @@ Follow this file as the single source of truth for commit behavior.
    - `python3 $SKILL_DIR/scripts/validate_commit_message.py --file <temp-file>`
    - The validator delegates to the repo's commitlint when configured and runnable (`"mode": "commitlint"`); otherwise it uses built-in rules (`"mode": "builtin"`).
    - If validation fails (`status` is `invalid`), revise and re-run validation until status is `ok`. Warnings do not block, but read them.
-7. Show full proposal and ask exactly:
-   - `Create commit with this message? (yes/no)`
-8. On `yes`:
+7. Show the full proposal and ask one question (see **Confirmation text**).
+8. On approval:
    - Run `git add` with explicit selected paths only.
    - Run `git commit -F <temp-file>` (never `--no-verify`).
    - Show `git log --oneline -n 1`.
-9. On `no`:
-   - Ask whether to edit or cancel.
-   - If edit, update message, re-validate, and show the full proposal again.
+   - For a plan, commit in order; if one fails, stop, report what was committed, and ask once about the rest.
+9. On an edit (free-form answer):
+   - Apply it, re-validate, and show the full proposal again.
 10. On cancel/stop request:
    - End without write commands.
 
 ## Hard rules
 
-1. Never run `git commit` without explicit `yes` to the full current message.
+1. Never run `git commit` without explicit approval of the full current message. One approval covers every message the chosen option showed in full (a split plan).
 2. Never use `git add .` or wildcard add commands.
 3. Never commit when there are no selected files.
 4. If unresolved merge conflict markers are present, require explicit confirmation before proceeding.
@@ -193,11 +192,58 @@ If user explicitly approves override, continue with extra caution and keep check
 
 ## Confirmation text
 
-Use these exact prompts to keep behavior deterministic:
+Ask one question per step. Alternatives are options of that question, not
+extra questions. A second question appears only for a finding: sensitive files,
+conflict markers, a secret-scan timeout, a failed commit.
 
-- `Include untracked files in this commit? (yes/no)`
+### Question tool
+
+Use the harness's structured question tool when it is in the current tool list:
+
+| Harness | Tool | Where the proposal goes |
+|---------|------|-------------------------|
+| Claude Code | `AskUserQuestion` | option `preview` |
+| omp | `ask` | option `preview` |
+| OpenCode | `question` | message before the call |
+| Hermes | `clarify` | message before the call |
+| Codex | `request_user_input` (CLI: Plan mode only) or `request_user_input_async` | message before the call |
+| pi | none built in; an extension may add `question` | message before the call |
+
+Other harnesses: use an equivalent tool if there is one, else the text prompts.
+
+- Offer at most 3 options so every tool can render them. The tool adds a
+  free-form answer itself; that answer is an edit: apply it, re-validate, ask
+  the same question again.
+- The proposal shows each full message with its file list, new files marked
+  `(new)`. Without a preview, print it as a normal message right before the call.
+- Choosing an option whose proposal lists new files is the explicit `yes` to
+  include them.
+- An async tool returns before the user answers: end the turn and act on the
+  reply when it arrives, never on the tool's return.
+- A dismissed question, an empty answer, or an option the harness picked itself
+  (e.g. after a timeout) means `no`. Only an explicit commit option allows
+  `git commit`.
+
+| Situation | Options, recommended first |
+|-----------|----------------------------|
+| One commit | `Commit`, `Cancel` |
+| New files present | `Commit with new files`, `Tracked only`, `Cancel` |
+| Split plan | `Commit all <N>`, `Single commit`, `Cancel` |
+| Finding | `Stop`, `Continue` |
+
+Each commit option carries its own proposal. A split plan places new files in
+its commits; leaving some out goes through the free-form answer.
+
+### Text prompts
+
+Without a question tool, show the recommended proposal in full and use these
+exact prompts. Any reply other than `yes` / `no` is an edit or an alternative
+(e.g. "tracked only", "single commit"): apply it, re-validate, ask again.
+
 - `Create commit with this message? (yes/no)`
-- `Edit message or cancel? (edit/cancel)`
+- `Create commit with this message, including the new files? (yes/no)`
+- `Create these <N> commits in order? (yes/no)`
+- `Edit message or cancel? (edit/cancel)` (after a bare `no`)
 - `Sensitive files detected. Continue anyway? (yes/no)`
 - `Conflict markers detected. Continue anyway? (yes/no)`
 - `Regex secret scan timed out. Continue with filename checks only? (yes/no)`
