@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Syntax check
-        run: python -m py_compile scripts/*.py tests/*.py
+        run: python -m py_compile skills/git-commit-helper/scripts/*.py tests/*.py
         shell: bash
       - name: Unit tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v

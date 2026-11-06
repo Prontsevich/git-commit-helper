@@ -10,7 +10,30 @@ location differs.
 
 ## Install
 
-Clone the repo once, then link it into every harness you use:
+### As a plugin
+
+Claude Code, Codex and omp install it from the `prontsevich` marketplace;
+Hermes installs it straight from this repository:
+
+```bash
+claude plugin marketplace add Prontsevich/prontsevich-skills
+claude plugin install git-commit-helper@prontsevich
+
+codex plugin marketplace add Prontsevich/prontsevich-skills
+codex plugin add git-commit-helper@prontsevich
+
+omp plugin marketplace add Prontsevich/prontsevich-skills
+omp plugin install git-commit-helper@prontsevich
+
+hermes plugins install Prontsevich/git-commit-helper --enable
+```
+
+Plugin skills carry the plugin prefix, as `git-commit-helper:git-commit-helper`.
+Do not also link the skill into a harness that has the plugin: both copies load.
+
+### With install.sh
+
+For other harnesses, clone the repo once, then link the skill into each:
 
 ```bash
 git clone https://github.com/Prontsevich/git-commit-helper.git ~/Projects/git-commit-helper
@@ -34,6 +57,10 @@ Targets and their paths:
 | `opencode` | `~/.config/opencode/skills/git-commit-helper` |
 | `copilot` | `~/.copilot/skills/git-commit-helper` |
 
+The skill lives in `skills/git-commit-helper/`, and `install.sh` links that
+folder. Links made before that move point at the repo root; run `./install.sh`
+again to repoint them.
+
 A symlink keeps every harness on the repo's current state. An existing plain
 directory is only replaced with `--force`; it is moved to
 `~/.git-commit-helper-backups/<target>-<timestamp>` first (never left beside
@@ -50,7 +77,8 @@ target repo has a config; otherwise built-in rules apply.
 4. Shows every full message and asks one question (the harness's question dialog when it has one, else a `(yes/no)` prompt).
 5. On approval runs `commit.py` again without `--dry-run`, which stages the explicit paths and commits with hooks enabled.
 
-Policy details live in `SKILL.md` and `references/commit.md`.
+Policy details live in `skills/git-commit-helper/SKILL.md` and its
+`references/commit.md`.
 
 ## Configuration
 
@@ -65,7 +93,8 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 python3 -m unittest tests.test_commit_helper_scripts.ValidateCommitMessageTestCase
 ```
 
-Scripts share `scripts/gitscope.py` for scope resolution. `preflight.py` and
+Scripts live in `skills/git-commit-helper/scripts/` and share `gitscope.py` for
+scope resolution. `preflight.py` and
 `commit.py` compose the single-purpose check scripts, which stay runnable on
 their own. Each script prints JSON and exits `0` (ok), `2` (findings), `1`
 (error); `preflight.py` and `check_secrets.py` exit `3` on a secret-scan timeout.

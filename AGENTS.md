@@ -4,20 +4,30 @@ Guidance for agentic coding assistants working in this repo.
 
 ## What this repo is
 
-An agent skill: `SKILL.md` (entry point), `references/commit.md` (policy),
-`scripts/*.py` (deterministic helpers), `tests/` (unit tests), `install.sh`
-(links the skill into agent harnesses). Python 3.10+ standard library only; no
+An agent skill packaged as a plugin. The skill is `skills/git-commit-helper/`:
+`SKILL.md` (entry point), `references/commit.md` (policy), `scripts/*.py`
+(deterministic helpers). Around it: `tests/` (unit tests), `install.sh` (links
+the skill folder into harnesses without plugins), `.claude-plugin/plugin.json`
+(Claude Code, Codex, omp) and `plugin.json` (Agent Plugins v1, Hermes). Python 3.10+ standard library only; no
 package manager, no third-party dependencies.
 
 ## Build, lint, test
 
-- Syntax check: `python3 -m py_compile scripts/*.py tests/*.py`
+- Syntax check: `python3 -m py_compile skills/git-commit-helper/scripts/*.py tests/*.py`
 - All tests: `python3 -m unittest discover -s tests -p 'test_*.py'`
 - One module: `python3 -m unittest tests.test_commit_helper_scripts`
 - One case: `python3 -m unittest tests.test_commit_helper_scripts.ValidateCommitMessageTestCase.test_header_tiers`
 - Installer dry run: `sh install.sh --check`
 
+- Manifest check: `claude plugin validate . --strict`
+
 CI (`.github/workflows/test.yml`) runs the same on Linux, macOS and Windows.
+
+## Releases
+
+Bump `version` in both `.claude-plugin/plugin.json` and `plugin.json` for every
+release; installed plugins update only when the version changes. Tag the
+release commit with an annotated `vX.Y.Z` tag and push the tag with it.
 
 ## Conventions
 

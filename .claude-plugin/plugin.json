@@ -1,0 +1,18 @@
+{
+  "name": "git-commit-helper",
+  "version": "1.0.0",
+  "description": "Safe Conventional Commit workflow: staged-first scope, conflict and secret checks, message validation, and a commit only after explicit confirmation.",
+  "author": {
+    "name": "Sergey Prontsevich",
+    "url": "https://github.com/Prontsevich"
+  },
+  "repository": "https://github.com/Prontsevich/git-commit-helper",
+  "keywords": [
+    "git",
+    "commit",
+    "conventional-commits"
+  ],
+  "skills": [
+    "./skills/git-commit-helper"
+  ]
+}

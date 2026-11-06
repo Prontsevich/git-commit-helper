@@ -7,8 +7,8 @@
 #
 # Without --search the script resolves its own location, following symlinks,
 # so a harness that only knows one install path can still print the canonical
-# directory. With --search it walks the usual per-harness skill roots and prints
-# the first one that contains git-commit-helper/SKILL.md.
+# directory. With --search it walks the usual per-harness skill roots, then the
+# plugin caches, and prints the first one that contains git-commit-helper/SKILL.md.
 
 set -eu
 
@@ -45,6 +45,21 @@ search_known_roots() {
         candidate="$PWD/$root/git-commit-helper"
         if [ -f "$candidate/SKILL.md" ]; then
             (cd "$candidate" && pwd -P)
+            return 0
+        fi
+    done
+    # Plugin installs: the last match of each pattern sorts as the newest version.
+    for pattern in \
+        "$home/.claude/plugins/cache/*/git-commit-helper/*/skills/git-commit-helper" \
+        "$home/.codex/plugins/cache/*/git-commit-helper/*/skills/git-commit-helper" \
+        "$home/.omp/plugins/cache/plugins/*___git-commit-helper___*/skills/git-commit-helper" \
+        "$home/.hermes/plugins/git-commit-helper/skills/git-commit-helper"; do
+        found=""
+        for candidate in $pattern; do
+            [ -f "$candidate/SKILL.md" ] && found="$candidate"
+        done
+        if [ -n "$found" ]; then
+            (cd "$found" && pwd -P)
             return 0
         fi
     done

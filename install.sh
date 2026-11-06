@@ -19,6 +19,7 @@
 set -eu
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+SKILL_SRC="$REPO_DIR/skills/git-commit-helper"
 MODE="link"
 FORCE=0
 CHECK=0
@@ -73,7 +74,7 @@ describe() {
     dest="$1"
     if [ -L "$dest" ]; then
         real="$(cd "$dest" 2>/dev/null && pwd -P || echo '?')"
-        if [ "$real" = "$REPO_DIR" ]; then
+        if [ "$real" = "$SKILL_SRC" ]; then
             echo "symlink -> repo (ok)"
         else
             echo "symlink -> $real (foreign)"
@@ -81,7 +82,7 @@ describe() {
     elif [ -d "$dest" ]; then
         drift=0
         for item in $PAYLOAD; do
-            if ! diff -rq --exclude=.DS_Store --exclude=__pycache__ "$REPO_DIR/$item" "$dest/$item" >/dev/null 2>&1; then
+            if ! diff -rq --exclude=.DS_Store --exclude=__pycache__ "$SKILL_SRC/$item" "$dest/$item" >/dev/null 2>&1; then
                 drift=$((drift + 1))
             fi
         done
@@ -123,8 +124,8 @@ install_link() {
         backup "$dest" "$target_name"
     fi
     mkdir -p "$(dirname "$dest")"
-    ln -s "$REPO_DIR" "$dest"
-    echo "  linked -> $REPO_DIR"
+    ln -s "$SKILL_SRC" "$dest"
+    echo "  linked -> $SKILL_SRC"
 }
 
 install_copy() {
@@ -141,7 +142,7 @@ install_copy() {
     fi
     mkdir -p "$dest"
     for item in $PAYLOAD; do
-        cp -R "$REPO_DIR/$item" "$dest/"
+        cp -R "$SKILL_SRC/$item" "$dest/"
     done
     find "$dest" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
     find "$dest" -name .DS_Store -delete 2>/dev/null || true
